@@ -11,7 +11,7 @@ import (
 	"github.com/codegangsta/cli"
 	"github.com/docker/swarm/api"
 	"github.com/docker/swarm/cluster"
-	"github.com/docker/swarm/cluster/swarm"
+	"github.com/docker/swarm/cluster/mesos"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/filter"
 	"github.com/docker/swarm/scheduler/strategy"
@@ -127,7 +127,8 @@ func manage(c *cli.Context) {
 		Heartbeat:       c.Int("heartbeat"),
 	}
 
-	cluster := swarm.NewCluster(sched, store, eventsHandler, options)
+	//	cluster := swarm.NewCluster(sched, store, eventsHandler, options)
+	cluster := mesos.NewCluster(sched, store, eventsHandler, options)
 
 	// see https://github.com/codegangsta/cli/issues/160
 	hosts := c.StringSlice("host")

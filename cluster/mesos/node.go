@@ -421,6 +421,8 @@ func (n *node) create(driver *mesosscheduler.MesosSchedulerDriver, config *docke
 	}
 	log.Debugf("create %v: %v", status, err)
 
+	n.offers = nil
+
 	// block until we get the container
 	<-n.updates[ID]
 

@@ -99,9 +99,9 @@ var (
 		Value: &flFilterValue,
 	}
 
-//	flCluster = cli.StringFlag{
-//		Name:  "cluster, c",
-//		Usage: "cluster to use [swarm, mesos]",
-//		Value: "swarm",
-//	}
+	flCluster = cli.StringFlag{
+		Name:  "cluster, c",
+		Usage: "cluster to use [swarm, mesos]",
+		Value: "swarm",
+	}
 )

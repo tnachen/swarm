@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/docker/docker/pkg/units"
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/node"
@@ -171,15 +172,15 @@ func (c *Cluster) listNodes() []*node.Node {
 	defer c.RUnlock()
 
 	out := []*node.Node{}
-	for _, n := range c.slaves {
-		out = append(out, node.NewNode(&n.Engine))
+	for _, s := range c.slaves {
+		out = append(out, s.toNode())
 	}
 
 	return out
 }
 
-// listEngines returns all the engines in the cluster.
-func (c *Cluster) listEngines() []*slave {
+// listEngines returns all the slaves in the cluster.
+func (c *Cluster) listSlaves() []*slave {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -199,9 +200,13 @@ func (c *Cluster) Info() [][2]string {
 
 	//sort.Sort(cluster.EngineSorter(nodes))
 
-	for _, node := range c.listEngines() {
-		info = append(info, [2]string{node.Name, node.Addr})
-		for _, offer := range node.offers {
+	for _, slave := range c.listSlaves() {
+		info = append(info, [2]string{slave.Name, slave.Addr})
+		info = append(info, [2]string{" └ Containers", fmt.Sprintf("%d", len(slave.Containers()))})
+		info = append(info, [2]string{" └ Reserved CPUs", fmt.Sprintf("%d / %d", slave.UsedCpus(), slave.TotalCpus())})
+		info = append(info, [2]string{" └ Reserved Memory", fmt.Sprintf("%s / %s", units.BytesSize(float64(slave.UsedMemory())), units.BytesSize(float64(slave.TotalMemory())))})
+		info = append(info, [2]string{" └ Offers", fmt.Sprintf("%d", len(slave.offers))})
+		for _, offer := range slave.offers {
 			info = append(info, [2]string{" Offer", offer.Id.GetValue()})
 			for _, resource := range offer.Resources {
 				info = append(info, [2]string{"  └ " + *resource.Name, fmt.Sprintf("%v", resource)})

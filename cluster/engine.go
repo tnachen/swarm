@@ -170,7 +170,7 @@ func (e *Engine) RefreshImages() error {
 	return nil
 }
 
-// Refresh the list and status of containers running on the engine. If `full` is
+// RefreshContainers will refresh the list and status of containers running on the engine. If `full` is
 // true, each container will be inspected.
 func (e *Engine) RefreshContainers(full bool) error {
 	containers, err := e.client.ListContainers(true, false, "")

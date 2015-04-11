@@ -15,6 +15,7 @@ import (
 	"github.com/samalba/dockerclient"
 )
 
+// Cluster struct for mesos
 type Cluster struct {
 	sync.RWMutex
 
@@ -32,6 +33,7 @@ var (
 	user          = ""
 )
 
+// NewCluster for mesos Cluster creation
 func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler cluster.EventHandler, options *cluster.Options) cluster.Cluster {
 	log.WithFields(log.Fields{"name": "mesos"}).Debug("Initializing cluster")
 
@@ -65,6 +67,7 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 	return cluster
 }
 
+// CreateContainer for container creation
 func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name string) (*cluster.Container, error) {
 
 	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), config)
@@ -92,11 +95,12 @@ func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name str
 	return nil, nil
 }
 
+// RemoveContainer to remove containers on mesos cluster
 func (c *Cluster) RemoveContainer(container *cluster.Container, force bool) error {
 	return nil
 }
 
-// Containers returns all the images in the cluster.
+// Images returns all the images in the cluster.
 func (c *Cluster) Images() []*cluster.Image {
 	c.RLock()
 	defer c.RUnlock()
@@ -158,10 +162,12 @@ func (c *Cluster) Container(IdOrName string) *cluster.Container {
 	return nil
 }
 
+// RemoveImage removes an image from the cluster
 func (c *Cluster) RemoveImage(image *cluster.Image) ([]*dockerclient.ImageDelete, error) {
 	return nil, nil
 }
 
+// Pull will pull images on the cluster nodes
 func (c *Cluster) Pull(name string, callback func(what, status string)) {
 
 }
@@ -179,7 +185,7 @@ func (c *Cluster) listNodes() []*node.Node {
 	return out
 }
 
-// listEngines returns all the slaves in the cluster.
+// listSlaves returns all the slaves in the cluster.
 func (c *Cluster) listSlaves() []*slave {
 	c.RLock()
 	defer c.RUnlock()
@@ -191,6 +197,7 @@ func (c *Cluster) listSlaves() []*slave {
 	return out
 }
 
+// Info gives minimal information about containers and resources on the mesos cluster
 func (c *Cluster) Info() [][2]string {
 	info := [][2]string{
 		{"\bStrategy", c.scheduler.Strategy()},
@@ -217,15 +224,19 @@ func (c *Cluster) Info() [][2]string {
 	return info
 }
 
+// Registered method for registered mesos framework
 func (c *Cluster) Registered(mesosscheduler.SchedulerDriver, *mesosproto.FrameworkID, *mesosproto.MasterInfo) {
 }
 
+// Reregistered method for registered mesos framework
 func (c *Cluster) Reregistered(mesosscheduler.SchedulerDriver, *mesosproto.MasterInfo) {
 }
 
+// Disconnected method
 func (c *Cluster) Disconnected(mesosscheduler.SchedulerDriver) {
 }
 
+// ResourceOffers method
 func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mesosproto.Offer) {
 	log.WithFields(log.Fields{"name": "mesos", "offers": len(offers)}).Debug("Offers received")
 
@@ -245,9 +256,11 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 	}
 }
 
+// OfferRescinded method
 func (c *Cluster) OfferRescinded(mesosscheduler.SchedulerDriver, *mesosproto.OfferID) {
 }
 
+// StatusUpdate method
 func (c *Cluster) StatusUpdate(_ mesosscheduler.SchedulerDriver, taskStatus *mesosproto.TaskStatus) {
 	log.WithFields(log.Fields{"name": "mesos", "state": taskStatus.State.String()}).Debug("Status update")
 
@@ -263,15 +276,19 @@ func (c *Cluster) StatusUpdate(_ mesosscheduler.SchedulerDriver, taskStatus *mes
 	fmt.Println("end")
 }
 
+// FrameworkMessage method
 func (c *Cluster) FrameworkMessage(mesosscheduler.SchedulerDriver, *mesosproto.ExecutorID, *mesosproto.SlaveID, string) {
 }
 
+// SlaveLost method
 func (c *Cluster) SlaveLost(mesosscheduler.SchedulerDriver, *mesosproto.SlaveID) {
 }
 
+// ExecutorLost method
 func (c *Cluster) ExecutorLost(mesosscheduler.SchedulerDriver, *mesosproto.ExecutorID, *mesosproto.SlaveID, int) {
 }
 
+// Error method
 func (c *Cluster) Error(d mesosscheduler.SchedulerDriver, msg string) {
 	log.Error(msg)
 }

@@ -20,6 +20,7 @@ type slave struct {
 	updates map[string]chan string
 }
 
+// NewSlave creates mesos slave agent
 func NewSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
 	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
 	slave.offers = []*mesosproto.Offer{offer}

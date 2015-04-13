@@ -59,7 +59,7 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 	cluster.driver = driver
 
 	status, err := driver.Start()
-	log.Debugf("NewCluster %v: %v", status, err)
+	log.Debugf("Mesos driver started, status/err %v: %v", status, err)
 	if err != nil {
 		return nil
 	}
@@ -225,15 +225,18 @@ func (c *Cluster) Info() [][2]string {
 }
 
 // Registered method for registered mesos framework
-func (c *Cluster) Registered(mesosscheduler.SchedulerDriver, *mesosproto.FrameworkID, *mesosproto.MasterInfo) {
+func (c *Cluster) Registered(driver mesosscheduler.SchedulerDriver, fwId *mesosproto.FrameworkID, masterInfo *mesosproto.MasterInfo) {
+	log.Debugf("Swarm is registered with Mesos with framework id: %s", fwId.GetValue())
 }
 
 // Reregistered method for registered mesos framework
 func (c *Cluster) Reregistered(mesosscheduler.SchedulerDriver, *mesosproto.MasterInfo) {
+	log.Debug("Swarm is re-registered with Mesos")
 }
 
 // Disconnected method
 func (c *Cluster) Disconnected(mesosscheduler.SchedulerDriver) {
+	log.Debug("Swarm is disconnectd with Mesos")
 }
 
 // ResourceOffers method

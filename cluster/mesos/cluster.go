@@ -2,6 +2,9 @@ package mesos
 
 import (
 	"fmt"
+	"net"
+	"os"
+	"strconv"
 	"sync"
 
 	log "github.com/Sirupsen/logrus"
@@ -49,6 +52,27 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 		Scheduler: cluster,
 		Framework: &mesosproto.FrameworkInfo{Name: &frameworkName, User: &user},
 		Master:    options.Discovery,
+	}
+
+	bindingAddressEnv := os.Getenv("SWARM_MESOS_ADDRESS")
+	bindingPortEnv := os.Getenv("SWARM_MESOS_PORT")
+
+	if bindingPortEnv != "" {
+		bindingPort, err := strconv.ParseUint(bindingPortEnv, 0, 16)
+		if err != nil {
+			log.Errorf("Unable to parse SWARM_MESOS_PORT, error: %s", err)
+			return nil
+		}
+		driverConfig.BindingPort = uint16(bindingPort)
+	}
+
+	if bindingAddressEnv != "" {
+		bindingAddress := net.ParseIP(bindingAddressEnv)
+		if bindingAddress == nil {
+			log.Error("Unable to parse SWARM_MESOS_ADDRESS")
+			return nil
+		}
+		driverConfig.BindingAddress = bindingAddress
 	}
 
 	driver, err := mesosscheduler.NewMesosSchedulerDriver(driverConfig)

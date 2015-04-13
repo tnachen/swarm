@@ -16,6 +16,7 @@ import (
 type slave struct {
 	cluster.Engine
 
+	slaveID string
 	offers  []*mesosproto.Offer
 	updates map[string]chan string
 }
@@ -24,13 +25,14 @@ type slave struct {
 func NewSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
 	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
 	slave.offers = []*mesosproto.Offer{offer}
+	slave.slaveID = offer.SlaveId.GetValue()
 	slave.updates = make(map[string]chan string)
 	return slave
 }
 
 func (s *slave) toNode() *node.Node {
 	return &node.Node{
-		ID:          s.ID,
+		ID:          s.slaveID,
 		IP:          s.IP,
 		Addr:        s.Addr,
 		Name:        s.Name,

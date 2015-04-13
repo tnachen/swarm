@@ -77,12 +77,12 @@ func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name str
 
 	if nn, ok := c.slaves[n.ID]; ok {
 		container, err := nn.create(c.driver, config, name, true)
-		if container == nil {
-			return nil, fmt.Errorf("Container failed to create")
-		}
-
 		if err != nil {
 			return nil, err
+		}
+
+		if container == nil {
+			return nil, fmt.Errorf("Container failed to create")
 		}
 
 		st := &state.RequestedState{

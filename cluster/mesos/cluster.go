@@ -58,6 +58,7 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 	bindingPortEnv := os.Getenv("SWARM_MESOS_PORT")
 
 	if bindingPortEnv != "" {
+		log.Debugf("SWARM_MESOS_PORT found, Binding port to %s", bindingPortEnv)
 		bindingPort, err := strconv.ParseUint(bindingPortEnv, 0, 16)
 		if err != nil {
 			log.Errorf("Unable to parse SWARM_MESOS_PORT, error: %s", err)
@@ -67,6 +68,7 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 	}
 
 	if bindingAddressEnv != "" {
+		log.Debugf("SWARM_MESOS_ADDRESS found, Binding address to %s", bindingAddressEnv)
 		bindingAddress := net.ParseIP(bindingAddressEnv)
 		if bindingAddress == nil {
 			log.Error("Unable to parse SWARM_MESOS_ADDRESS")

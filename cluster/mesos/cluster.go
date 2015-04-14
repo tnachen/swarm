@@ -55,6 +55,11 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 		Master:    options.Discovery,
 	}
 
+	// Changing port for https
+	if options.TLSConfig != nil {
+		dockerDaemonPort = "2376"
+	}
+
 	bindingAddressEnv := os.Getenv("SWARM_MESOS_ADDRESS")
 	bindingPortEnv := os.Getenv("SWARM_MESOS_PORT")
 

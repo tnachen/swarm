@@ -117,12 +117,14 @@ func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name str
 			return nil, fmt.Errorf("Container failed to create")
 		}
 
-		st := &state.RequestedState{
-			ID:     container.Id,
-			Name:   name,
-			Config: config,
-		}
-		return container, c.store.Add(container.Id, st)
+		// TODO: do not store the container as it might be a wrong ContainerID
+		// see TODO in slave.go
+		//st := &state.RequestedState{
+		//ID:     container.Id,
+		//Name:   name,
+		//Config: config,
+		//}
+		return container, nil //c.store.Add(container.Id, st)
 	}
 	return nil, nil
 }
@@ -299,16 +301,11 @@ func (c *Cluster) OfferRescinded(mesosscheduler.SchedulerDriver, *mesosproto.Off
 func (c *Cluster) StatusUpdate(_ mesosscheduler.SchedulerDriver, taskStatus *mesosproto.TaskStatus) {
 	log.WithFields(log.Fields{"name": "mesos", "state": taskStatus.State.String()}).Debug("Status update")
 
-	ID := taskStatus.TaskId.GetValue()
-	slaveId := taskStatus.SlaveId.GetValue()
-
-	if slave, ok := c.slaves[slaveId]; ok {
-		fmt.Println("Slave", slaveId, "found")
-		slave.updates[ID] <- taskStatus.State.String()
+	if slave, ok := c.slaves[taskStatus.SlaveId.GetValue()]; ok {
+		slave.statuses[taskStatus.TaskId.GetValue()] <- taskStatus
 	} else {
-		fmt.Println("Slave", slaveId, "not found")
+		log.WithFields(log.Fields{"name": "mesos", "state": taskStatus.State.String(), "slaveId": taskStatus.SlaveId.GetValue()}).Warn("Status update received for unknown slave")
 	}
-	fmt.Println("end")
 }
 
 // FrameworkMessage method

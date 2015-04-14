@@ -32,8 +32,9 @@ type Cluster struct {
 }
 
 var (
-	frameworkName = "swarm"
-	user          = ""
+	frameworkName    = "swarm"
+	user             = ""
+	dockerDaemonPort = "2375"
 )
 
 // NewCluster for mesos Cluster creation
@@ -274,7 +275,7 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 		if slave, ok := c.slaves[slaveId]; ok {
 			slave.addOffer(offer)
 		} else {
-			slave := NewSlave(*offer.Hostname+":4242", c.options.OvercommitRatio, offer)
+			slave := NewSlave(*offer.Hostname+":"+dockerDaemonPort, c.options.OvercommitRatio, offer)
 			err := slave.Connect(c.options.TLSConfig)
 			if err != nil {
 				log.Error(err)

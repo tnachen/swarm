@@ -3,6 +3,7 @@ package mesos
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/swarm/cluster"
@@ -17,16 +18,16 @@ import (
 type slave struct {
 	cluster.Engine
 
-	slaveID *mesosproto.SlaveID
-	offers  []*mesosproto.Offer
-	updates map[string]chan string
+	slaveID  *mesosproto.SlaveID
+	offers   []*mesosproto.Offer
+	statuses map[string]chan *mesosproto.TaskStatus
 }
 
 // NewSlave creates mesos slave agent
 func NewSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
 	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
 	slave.offers = []*mesosproto.Offer{offer}
-	slave.updates = make(map[string]chan string)
+	slave.statuses = make(map[string]chan *mesosproto.TaskStatus)
 	slave.slaveID = offer.SlaveId
 	return slave
 }
@@ -75,8 +76,7 @@ func (s *slave) UsedCpus() int64 {
 
 func generateTaskID() (string, error) {
 	id := make([]byte, 6)
-	n, err := rand.Read(id)
-	if n != len(id) || err != nil {
+	if _, err := rand.Read(id); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(id), nil
@@ -88,7 +88,7 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 		return nil, err
 	}
 
-	s.updates[ID] = make(chan string)
+	s.statuses[ID] = make(chan *mesosproto.TaskStatus)
 
 	resources := []*mesosproto.Resource{}
 
@@ -142,7 +142,22 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 	s.offers = []*mesosproto.Offer{}
 
 	// block until we get the container
-	<-s.updates[ID]
+
+	taskStatus := <-s.statuses[ID]
+
+	switch taskStatus.GetState() {
+	case mesosproto.TaskState_TASK_STAGING:
+	case mesosproto.TaskState_TASK_STARTING:
+	case mesosproto.TaskState_TASK_RUNNING:
+	case mesosproto.TaskState_TASK_FINISHED:
+	case mesosproto.TaskState_TASK_FAILED:
+		return nil, errors.New(taskStatus.GetMessage())
+	case mesosproto.TaskState_TASK_KILLED:
+	case mesosproto.TaskState_TASK_LOST:
+		return nil, errors.New(taskStatus.GetMessage())
+	case mesosproto.TaskState_TASK_ERROR:
+		return nil, errors.New(taskStatus.GetMessage())
+	}
 
 	// Register the container immediately while waiting for a state refresh.
 	// Force a state refresh to pick up the newly created container.

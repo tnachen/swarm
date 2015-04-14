@@ -9,6 +9,7 @@ import (
 	"github.com/docker/swarm/scheduler/node"
 	"github.com/gogo/protobuf/proto"
 	"github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesos/mesos-go/mesosutil"
 	mesosscheduler "github.com/mesos/mesos-go/scheduler"
 	"github.com/samalba/dockerclient"
 )
@@ -16,7 +17,7 @@ import (
 type slave struct {
 	cluster.Engine
 
-	slaveID string
+	slaveID *mesosproto.SlaveID
 	offers  []*mesosproto.Offer
 	updates map[string]chan string
 }
@@ -25,14 +26,14 @@ type slave struct {
 func NewSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
 	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
 	slave.offers = []*mesosproto.Offer{offer}
-	slave.slaveID = offer.SlaveId.GetValue()
 	slave.updates = make(map[string]chan string)
+	slave.slaveID = offer.SlaveId
 	return slave
 }
 
 func (s *slave) toNode() *node.Node {
 	return &node.Node{
-		ID:          s.slaveID,
+		ID:          s.slaveID.GetValue(),
 		IP:          s.IP,
 		Addr:        s.Addr,
 		Name:        s.Name,
@@ -72,37 +73,41 @@ func (s *slave) UsedCpus() int64 {
 	return s.TotalCpus() - int64(s.scalarResourceValue("cpus"))
 }
 
-func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dockerclient.ContainerConfig, name string, pullImage bool) (*cluster.Container, error) {
-
+func generateTaskID() (string, error) {
 	id := make([]byte, 6)
-	nn, err := rand.Read(id)
-	if nn != len(id) || err != nil {
+	n, err := rand.Read(id)
+	if n != len(id) || err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(id), nil
+}
+
+func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dockerclient.ContainerConfig, name string, pullImage bool) (*cluster.Container, error) {
+	ID, err := generateTaskID()
+	if err != nil {
 		return nil, err
 	}
-	ID := hex.EncodeToString(id)
 
 	s.updates[ID] = make(chan string)
 
-	cpus := "cpus"
-	typ := mesosproto.Value_SCALAR
-	val := 1.0
+	resources := []*mesosproto.Resource{}
+
+	if cpus := config.CpuShares; cpus > 0 {
+		resources = append(resources, mesosutil.NewScalarResource("cpus", float64(cpus)))
+	}
+
+	if mem := config.Memory; mem > 0 {
+		resources = append(resources, mesosutil.NewScalarResource("mem", float64(mem/1024/1024)))
+	}
 
 	taskInfo := &mesosproto.TaskInfo{
 		Name: &name,
 		TaskId: &mesosproto.TaskID{
 			Value: &ID,
 		},
-		SlaveId: s.offers[0].SlaveId,
-		Resources: []*mesosproto.Resource{
-			{
-				Name: &cpus,
-				Type: &typ,
-				Scalar: &mesosproto.Value_Scalar{
-					Value: &val,
-				},
-			},
-		},
-		Command: &mesosproto.CommandInfo{},
+		SlaveId:   s.slaveID,
+		Resources: resources,
+		Command:   &mesosproto.CommandInfo{},
 	}
 
 	if len(config.Cmd) > 0 && config.Cmd[0] != "" {

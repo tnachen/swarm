@@ -48,9 +48,12 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 		store:        store,
 	}
 
+	// Empty string is accepted by the scheduler.
+	user := os.Getenv("SWARM_MESOS_USER")
+
 	driverConfig := mesosscheduler.DriverConfig{
 		Scheduler: cluster,
-		Framework: &mesosproto.FrameworkInfo{Name: &frameworkName},
+		Framework: &mesosproto.FrameworkInfo{Name: &frameworkName, User: &user},
 		Master:    options.Discovery,
 	}
 

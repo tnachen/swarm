@@ -304,7 +304,17 @@ func (c *Cluster) StatusUpdate(_ mesosscheduler.SchedulerDriver, taskStatus *mes
 	if slave, ok := c.slaves[taskStatus.SlaveId.GetValue()]; ok {
 		slave.statuses[taskStatus.TaskId.GetValue()] <- taskStatus
 	} else {
-		log.WithFields(log.Fields{"name": "mesos", "state": taskStatus.State.String(), "slaveId": taskStatus.SlaveId.GetValue()}).Warn("Status update received for unknown slave")
+		var reason = ""
+		if taskStatus.Reason != nil {
+			reason = taskStatus.GetReason().String()
+		}
+
+		log.WithFields(log.Fields{
+			"name":    "mesos",
+			"state":   taskStatus.State.String(),
+			"slaveId": taskStatus.SlaveId.GetValue(),
+			"reason":  reason,
+		}).Warn("Status update received for unknown slave")
 	}
 }
 

@@ -33,7 +33,6 @@ type Cluster struct {
 
 var (
 	frameworkName    = "swarm"
-	user             = ""
 	dockerDaemonPort = "2375"
 )
 
@@ -51,7 +50,7 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 
 	driverConfig := mesosscheduler.DriverConfig{
 		Scheduler: cluster,
-		Framework: &mesosproto.FrameworkInfo{Name: &frameworkName, User: &user},
+		Framework: &mesosproto.FrameworkInfo{Name: &frameworkName},
 		Master:    options.Discovery,
 	}
 

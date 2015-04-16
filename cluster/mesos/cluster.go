@@ -150,16 +150,16 @@ func (c *Cluster) Images() []*cluster.Image {
 }
 
 // Image returns an image with IdOrName in the cluster
-func (c *Cluster) Image(IdOrName string) *cluster.Image {
+func (c *Cluster) Image(IDOrName string) *cluster.Image {
 	// Abort immediately if the name is empty.
-	if len(IdOrName) == 0 {
+	if len(IDOrName) == 0 {
 		return nil
 	}
 
 	c.RLock()
 	defer c.RUnlock()
 	for _, n := range c.slaves {
-		if image := n.Image(IdOrName); image != nil {
+		if image := n.Image(IDOrName); image != nil {
 			return image
 		}
 	}
@@ -181,16 +181,16 @@ func (c *Cluster) Containers() []*cluster.Container {
 }
 
 // Container returns the container with IdOrName in the cluster
-func (c *Cluster) Container(IdOrName string) *cluster.Container {
+func (c *Cluster) Container(IDOrName string) *cluster.Container {
 	// Abort immediately if the name is empty.
-	if len(IdOrName) == 0 {
+	if len(IDOrName) == 0 {
 		return nil
 	}
 
 	c.RLock()
 	defer c.RUnlock()
 	for _, n := range c.slaves {
-		if container := n.Container(IdOrName); container != nil {
+		if container := n.Container(IDOrName); container != nil {
 			return container
 		}
 	}
@@ -261,8 +261,8 @@ func (c *Cluster) Info() [][2]string {
 }
 
 // Registered method for registered mesos framework
-func (c *Cluster) Registered(driver mesosscheduler.SchedulerDriver, fwId *mesosproto.FrameworkID, masterInfo *mesosproto.MasterInfo) {
-	log.Debugf("Swarm is registered with Mesos with framework id: %s", fwId.GetValue())
+func (c *Cluster) Registered(driver mesosscheduler.SchedulerDriver, fwID *mesosproto.FrameworkID, masterInfo *mesosproto.MasterInfo) {
+	log.Debugf("Swarm is registered with Mesos with framework id: %s", fwID.GetValue())
 }
 
 // Reregistered method for registered mesos framework
@@ -280,16 +280,16 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 	log.WithFields(log.Fields{"name": "mesos", "offers": len(offers)}).Debug("Offers received")
 
 	for _, offer := range offers {
-		slaveId := offer.SlaveId.GetValue()
-		if slave, ok := c.slaves[slaveId]; ok {
+		slaveID := offer.SlaveId.GetValue()
+		if slave, ok := c.slaves[slaveID]; ok {
 			slave.addOffer(offer)
 		} else {
-			slave := NewSlave(*offer.Hostname+":"+dockerDaemonPort, c.options.OvercommitRatio, offer)
+			slave := newSlave(*offer.Hostname+":"+dockerDaemonPort, c.options.OvercommitRatio, offer)
 			err := slave.Connect(c.options.TLSConfig)
 			if err != nil {
 				log.Error(err)
 			} else {
-				c.slaves[slaveId] = slave
+				c.slaves[slaveID] = slave
 			}
 		}
 	}

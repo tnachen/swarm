@@ -24,7 +24,7 @@ type slave struct {
 }
 
 // NewSlave creates mesos slave agent
-func NewSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
+func newSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
 	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
 	slave.offers = []*mesosproto.Offer{offer}
 	slave.statuses = make(map[string]chan *mesosproto.TaskStatus)

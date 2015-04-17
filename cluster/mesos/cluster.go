@@ -1,6 +1,7 @@
 package mesos
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -37,15 +38,14 @@ var (
 )
 
 // NewCluster for mesos Cluster creation
-func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler cluster.EventHandler, options *cluster.Options) cluster.Cluster {
+func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, options *cluster.Options) cluster.Cluster {
 	log.WithFields(log.Fields{"name": "mesos"}).Debug("Initializing cluster")
 
 	cluster := &Cluster{
-		eventHandler: eventhandler,
-		slaves:       make(map[string]*slave),
-		scheduler:    scheduler,
-		options:      options,
-		store:        store,
+		slaves:    make(map[string]*slave),
+		scheduler: scheduler,
+		options:   options,
+		store:     store,
 	}
 
 	// Empty string is accepted by the scheduler.
@@ -99,6 +99,15 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, eventhandler
 	}
 
 	return cluster
+}
+
+// RegisterEventHandler registers an event handler.
+func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
+	if c.eventHandler != nil {
+		return errors.New("event handler already set")
+	}
+	c.eventHandler = h
+	return nil
 }
 
 // CreateContainer for container creation
@@ -335,4 +344,9 @@ func (c *Cluster) ExecutorLost(mesosscheduler.SchedulerDriver, *mesosproto.Execu
 // Error method
 func (c *Cluster) Error(d mesosscheduler.SchedulerDriver, msg string) {
 	log.Error(msg)
+}
+
+// RANDOMENGINE returns a random engine.
+func (c *Cluster) RANDOMENGINE() (*cluster.Engine, error) {
+	return nil, nil
 }

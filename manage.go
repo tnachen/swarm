@@ -135,9 +135,9 @@ func manage(c *cli.Context) {
 	var cl cluster.Cluster
 	switch c.String("cluster") {
 	case "mesos":
-		cl = mesos.NewCluster(sched, store, eventsHandler, options)
+		cl = mesos.NewCluster(sched, store, options)
 	case "swarm":
-		cl = swarm.NewCluster(sched, store, eventsHandler, options)
+		cl = swarm.NewCluster(sched, store, options)
 	default:
 		log.Fatalf("Unsupported cluster %q", c.String("cluster"))
 	}
@@ -147,5 +147,5 @@ func manage(c *cli.Context) {
 	if c.IsSet("host") || c.IsSet("H") {
 		hosts = hosts[1:]
 	}
-	log.Fatal(api.ListenAndServe(cl, hosts, c.Bool("cors"), tlsConfig, eventsHandler))
+	log.Fatal(api.ListenAndServe(cl, hosts, c.Bool("cors"), tlsConfig))
 }

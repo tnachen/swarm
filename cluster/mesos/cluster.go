@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -250,9 +251,10 @@ func (c *Cluster) Info() [][2]string {
 		{"\bSlaves", fmt.Sprintf("%d", len(c.slaves))},
 	}
 
-	//sort.Sort(cluster.EngineSorter(nodes))
+	slaves := c.listSlaves()
+	sort.Sort(SlaveSorter(slaves))
 
-	for _, slave := range c.listSlaves() {
+	for _, slave := range slaves {
 		info = append(info, [2]string{slave.Name, slave.Addr})
 		info = append(info, [2]string{" └ Containers", fmt.Sprintf("%d", len(slave.Containers()))})
 		info = append(info, [2]string{" └ Reserved CPUs", fmt.Sprintf("%d / %d", slave.UsedCpus(), slave.TotalCpus())})

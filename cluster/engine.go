@@ -87,7 +87,7 @@ func (e *Engine) connectClient(client dockerclient.Client) error {
 	}
 
 	// Force a state update before returning.
-	if err := e.RefreshContainers(true); err != nil {
+	if err := e.refreshContainers(true); err != nil {
 		e.client = nil
 		return err
 	}
@@ -170,9 +170,9 @@ func (e *Engine) RefreshImages() error {
 	return nil
 }
 
-// RefreshContainers will refresh the list and status of containers running on the engine. If `full` is
+// refreshContainers will refresh the list and status of containers running on the engine. If `full` is
 // true, each container will be inspected.
-func (e *Engine) RefreshContainers(full bool) error {
+func (e *Engine) refreshContainers(full bool) error {
 	containers, err := e.client.ListContainers(true, false, "")
 	if err != nil {
 		return err
@@ -194,9 +194,9 @@ func (e *Engine) RefreshContainers(full bool) error {
 	return nil
 }
 
-// Refresh the status of a container running on the engine. If `full` is true,
+// RefreshContainer refreshes the status of a container running on the engine. If `full` is true,
 // the container will be inspected.
-func (e *Engine) refreshContainer(ID string, full bool) error {
+func (e *Engine) RefreshContainer(ID string, full bool) error {
 	containers, err := e.client.ListContainers(true, false, fmt.Sprintf("{%q:[%q]}", "id", ID))
 	if err != nil {
 		return err
@@ -204,7 +204,7 @@ func (e *Engine) refreshContainer(ID string, full bool) error {
 
 	if len(containers) > 1 {
 		// We expect one container, if we get more than one, trigger a full refresh.
-		return e.RefreshContainers(full)
+		return e.refreshContainers(full)
 	}
 
 	if len(containers) == 0 {
@@ -269,9 +269,9 @@ func (e *Engine) refreshLoop() {
 		var err error
 		select {
 		case <-e.ch:
-			err = e.RefreshContainers(false)
+			err = e.refreshContainers(false)
 		case <-time.After(stateRefreshPeriod):
-			err = e.RefreshContainers(false)
+			err = e.refreshContainers(false)
 		}
 
 		if err == nil {
@@ -377,7 +377,7 @@ func (e *Engine) Create(config *dockerclient.ContainerConfig, name string, pullI
 
 	// Register the container immediately while waiting for a state refresh.
 	// Force a state refresh to pick up the newly created container.
-	e.refreshContainer(id, true)
+	e.RefreshContainer(id, true)
 
 	e.RLock()
 	defer e.RUnlock()
@@ -494,10 +494,10 @@ func (e *Engine) handler(ev *dockerclient.Event, _ chan error, args ...interface
 	case "start", "die":
 		// If the container is started or stopped, we have to do an inspect in
 		// order to get the new NetworkSettings.
-		e.refreshContainer(ev.Id, true)
+		e.RefreshContainer(ev.Id, true)
 	default:
 		// Otherwise, do a "soft" refresh of the container.
-		e.refreshContainer(ev.Id, false)
+		e.RefreshContainer(ev.Id, false)
 	}
 
 	// If there is no event handler registered, abort right now.

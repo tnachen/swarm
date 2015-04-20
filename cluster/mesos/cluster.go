@@ -129,14 +129,12 @@ func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name str
 			return nil, fmt.Errorf("Container failed to create")
 		}
 
-		// TODO: do not store the container as it might be a wrong ContainerID
-		// see TODO in slave.go
-		//st := &state.RequestedState{
-		//ID:     container.Id,
-		//Name:   name,
-		//Config: config,
-		//}
-		return container, nil //c.store.Add(container.Id, st)
+		st := &state.RequestedState{
+			ID:     container.Id,
+			Name:   name,
+			Config: config,
+		}
+		return container, c.store.Add(container.Id, st)
 	}
 	return nil, nil
 }

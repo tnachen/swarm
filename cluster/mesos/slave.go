@@ -3,6 +3,7 @@ package mesos
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 
 	log "github.com/Sirupsen/logrus"
@@ -160,18 +161,17 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 		return nil, errors.New(taskStatus.GetMessage())
 	}
 
+	inspect := []dockerclient.ContainerInfo{}
+	if err := json.Unmarshal(taskStatus.Data, inspect); err != nil {
+		return nil, err
+	}
+
 	// Register the container immediately while waiting for a state refresh.
 	// Force a state refresh to pick up the newly created container.
-	s.RefreshContainers(true)
+	s.RefreshContainer(inspect[0].Id, true)
 
 	s.RLock()
 	defer s.RUnlock()
 
-	// TODO: We have to return the right container that was just created.
-	// Once we receive the ContainerID from the executor.
-	for _, container := range s.Containers() {
-		return container, nil
-	}
-
-	return nil, nil
+	return s.Container(inspect[0].Id), nil
 }

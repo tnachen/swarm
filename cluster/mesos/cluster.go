@@ -350,5 +350,12 @@ func (c *Cluster) Error(d mesosscheduler.SchedulerDriver, msg string) {
 
 // RANDOMENGINE returns a random engine.
 func (c *Cluster) RANDOMENGINE() (*cluster.Engine, error) {
+	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), &dockerclient.ContainerConfig{})
+	if err != nil {
+		return nil, err
+	}
+	if n != nil {
+		return &c.slaves[n.ID].Engine, nil
+	}
 	return nil, nil
 }

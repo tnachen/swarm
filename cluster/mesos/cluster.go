@@ -315,7 +315,9 @@ func (c *Cluster) StatusUpdate(_ mesosscheduler.SchedulerDriver, taskStatus *mes
 	log.WithFields(log.Fields{"name": "mesos", "state": taskStatus.State.String()}).Debug("Status update")
 
 	if slave, ok := c.slaves[taskStatus.SlaveId.GetValue()]; ok {
-		slave.statuses[taskStatus.TaskId.GetValue()] <- taskStatus
+		if ch, ok := slave.statuses[taskStatus.TaskId.GetValue()]; ok {
+			ch <- taskStatus
+		}
 	} else {
 		var reason = ""
 		if taskStatus.Reason != nil {

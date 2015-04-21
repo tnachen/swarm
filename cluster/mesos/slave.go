@@ -2,10 +2,12 @@ package mesos
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"net/http"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/scheduler/node"
 	"github.com/gogo/protobuf/proto"
@@ -48,6 +50,32 @@ func (s *slave) toNode() *node.Node {
 		TotalCpus:   s.TotalCpus(),
 		IsHealthy:   s.IsHealthy(),
 	}
+}
+
+// connect to the docker engine and to the mesos slave to update the total mem and cpus
+func (s *slave) connect(config *tls.Config) error {
+	if err := s.Connect(config); err != nil {
+		return err
+	}
+	resp, err := http.Get("http://" + s.IP + ":5051/state.json")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	resources := struct {
+		Resources struct {
+			Cpus int64
+			Mem  int64
+		}
+	}{}
+	if err := json.NewDecoder(resp.Body).Decode(&resources); err != nil {
+		return err
+	}
+	s.Cpus = resources.Resources.Cpus
+	s.Memory = resources.Resources.Mem * 1024 * 1024
+
+	return nil
 }
 
 func (s *slave) addOffer(offer *mesosproto.Offer) {
@@ -133,11 +161,9 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 		offerIds = append(offerIds, offer.Id)
 	}
 
-	status, err := driver.LaunchTasks(offerIds, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{})
-	if err != nil {
+	if _, err := driver.LaunchTasks(offerIds, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{}); err != nil {
 		return nil, err
 	}
-	log.Debugf("create %v: %v", status, err)
 
 	s.offers = []*mesosproto.Offer{}
 

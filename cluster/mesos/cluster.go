@@ -273,17 +273,17 @@ func (c *Cluster) Info() [][2]string {
 
 // Registered method for registered mesos framework
 func (c *Cluster) Registered(driver mesosscheduler.SchedulerDriver, fwID *mesosproto.FrameworkID, masterInfo *mesosproto.MasterInfo) {
-	log.Debugf("Swarm is registered with Mesos with framework id: %s", fwID.GetValue())
+	log.WithFields(log.Fields{"name": "mesos", "frameworkId": fwID.GetValue()}).Debug("Framework registered")
 }
 
 // Reregistered method for registered mesos framework
 func (c *Cluster) Reregistered(mesosscheduler.SchedulerDriver, *mesosproto.MasterInfo) {
-	log.Debug("Swarm is re-registered with Mesos")
+	log.WithFields(log.Fields{"name": "mesos"}).Debug("Framework re-registered")
 }
 
 // Disconnected method
 func (c *Cluster) Disconnected(mesosscheduler.SchedulerDriver) {
-	log.Debug("Swarm is disconnectd with Mesos")
+	log.WithFields(log.Fields{"name": "mesos"}).Debug("Framework disconnected")
 }
 
 // ResourceOffers method
@@ -295,8 +295,8 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 		if slave, ok := c.slaves[slaveID]; ok {
 			slave.addOffer(offer)
 		} else {
-			slave := newSlave(*offer.Hostname+":"+dockerDaemonPort, c.options.OvercommitRatio, offer)
-			err := slave.Connect(c.options.TLSConfig)
+			slave := newSlave(*offer.Hostname+":"+dockerDaemonPort, 0, offer)
+			err := slave.connect(c.options.TLSConfig)
 			if err != nil {
 				log.Error(err)
 			} else {
@@ -347,7 +347,7 @@ func (c *Cluster) ExecutorLost(mesosscheduler.SchedulerDriver, *mesosproto.Execu
 
 // Error method
 func (c *Cluster) Error(d mesosscheduler.SchedulerDriver, msg string) {
-	log.Error(msg)
+	log.WithFields(log.Fields{"name": "mesos"}).Error(msg)
 }
 
 // RANDOMENGINE returns a random engine.

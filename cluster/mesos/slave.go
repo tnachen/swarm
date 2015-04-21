@@ -144,6 +144,7 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 	// block until we get the container
 
 	taskStatus := <-s.statuses[ID]
+	delete(s.statuses, ID)
 
 	switch taskStatus.GetState() {
 	case mesosproto.TaskState_TASK_STAGING:

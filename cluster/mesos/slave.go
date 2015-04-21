@@ -162,7 +162,7 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 	}
 
 	inspect := []dockerclient.ContainerInfo{}
-	if err := json.Unmarshal(taskStatus.Data, inspect); err != nil {
+	if err := json.Unmarshal(taskStatus.Data, &inspect); err != nil {
 		return nil, err
 	}
 

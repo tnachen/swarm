@@ -155,8 +155,8 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 
 	taskInfo.Command.Shell = proto.Bool(false)
 
+	// TODO: Only use the offer we need
 	offerIds := []*mesosproto.OfferID{}
-
 	for _, offer := range s.offers {
 		offerIds = append(offerIds, offer.Id)
 	}
@@ -165,10 +165,10 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 		return nil, err
 	}
 
+	// TODO: Do not erase all the offers, not all
 	s.offers = []*mesosproto.Offer{}
 
 	// block until we get the container
-
 	taskStatus := <-s.statuses[ID]
 	delete(s.statuses, ID)
 

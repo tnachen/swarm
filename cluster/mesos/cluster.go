@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/pkg/units"
@@ -34,8 +35,9 @@ type Cluster struct {
 }
 
 var (
-	frameworkName    = "swarm"
-	dockerDaemonPort = "2375"
+	frameworkName       = "swarm"
+	dockerDaemonPort    = "2375"
+	defaultOfferTimeout = "10m"
 )
 
 // NewCluster for mesos Cluster creation
@@ -291,6 +293,7 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 	log.WithFields(log.Fields{"name": "mesos", "offers": len(offers)}).Debug("Offers received")
 
 	for _, offer := range offers {
+		offerID := offer.Id
 		slaveID := offer.SlaveId.GetValue()
 		if slave, ok := c.slaves[slaveID]; ok {
 			slave.addOffer(offer)
@@ -303,6 +306,27 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 				c.slaves[slaveID] = slave
 			}
 		}
+		go func(id *mesosproto.OfferID, slaveId string) {
+			offerTimeout := os.Getenv("SWARM_MESOS_OFFER_TIMEOUT")
+			if offerTimeout == "" {
+				offerTimeout = defaultOfferTimeout
+			}
+
+			d, err := time.ParseDuration(offerTimeout)
+			if err != nil {
+				d = 10 * time.Minute
+			}
+			<-time.After(d)
+			if slave, ok := c.slaves[slaveID]; ok {
+				if slave.removeOffer(id.GetValue()) {
+					if _, err := c.driver.DeclineOffer(id, &mesosproto.Filters{}); err != nil {
+						log.WithFields(log.Fields{"name": "mesos"}).Errorf("Error while declining offer %q: %v", id.GetValue(), err)
+					} else {
+						log.WithFields(log.Fields{"name": "mesos"}).Debugf("Offer %q declined successfully", id.GetValue())
+					}
+				}
+			}
+		}(offerID, slaveID)
 	}
 }
 

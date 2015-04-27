@@ -21,16 +21,17 @@ type slave struct {
 	cluster.Engine
 
 	slaveID  *mesosproto.SlaveID
-	offers   []*mesosproto.Offer
+	offers   map[string]*mesosproto.Offer
 	statuses map[string]chan *mesosproto.TaskStatus
 }
 
 // NewSlave creates mesos slave agent
 func newSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
 	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
-	slave.offers = []*mesosproto.Offer{offer}
+	slave.offers = make(map[string]*mesosproto.Offer)
 	slave.statuses = make(map[string]chan *mesosproto.TaskStatus)
 	slave.slaveID = offer.SlaveId
+	slave.addOffer(offer)
 	return slave
 }
 
@@ -79,7 +80,19 @@ func (s *slave) connect(config *tls.Config) error {
 }
 
 func (s *slave) addOffer(offer *mesosproto.Offer) {
-	s.offers = append(s.offers, offer)
+	s.Lock()
+	s.offers[offer.Id.GetValue()] = offer
+	s.Unlock()
+}
+
+func (s *slave) removeOffer(offerID string) bool {
+	s.Lock()
+	defer s.Unlock()
+	_, ok := s.offers[offerID]
+	if ok {
+		delete(s.offers, offerID)
+	}
+	return ok
 }
 
 func (s *slave) scalarResourceValue(name string) float64 {
@@ -155,6 +168,7 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 
 	taskInfo.Command.Shell = proto.Bool(false)
 
+	s.Lock()
 	// TODO: Only use the offer we need
 	offerIds := []*mesosproto.OfferID{}
 	for _, offer := range s.offers {
@@ -165,8 +179,9 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 		return nil, err
 	}
 
-	// TODO: Do not erase all the offers, not all
-	s.offers = []*mesosproto.Offer{}
+	// TODO: Do not erase all the offers, only the one used
+	s.offers = make(map[string]*mesosproto.Offer)
+	s.Unlock()
 
 	// block until we get the container
 	taskStatus := <-s.statuses[ID]

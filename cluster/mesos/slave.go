@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/docker/swarm/cluster"
@@ -95,6 +94,20 @@ func (s *slave) removeOffer(offerID string) bool {
 	return ok
 }
 
+func matchResources(offered, needed []*mesosproto.Resource) bool {
+	return true
+}
+
+func (s *slave) matchOffer(resources []*mesosproto.Resource) *mesosproto.OfferID {
+	for _, offer := range s.offers {
+		if matchResources(offer.Resources, resources) {
+			return offer.Id
+		}
+
+	}
+	return nil
+}
+
 func (s *slave) scalarResourceValue(name string) float64 {
 	var value float64
 	for _, offer := range s.offers {
@@ -169,38 +182,42 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 	taskInfo.Command.Shell = proto.Bool(false)
 
 	s.Lock()
-	// TODO: Only use the offer we need
-	offerIds := []*mesosproto.OfferID{}
-	for _, offer := range s.offers {
-		offerIds = append(offerIds, offer.Id)
-	}
 
-	if _, err := driver.LaunchTasks(offerIds, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{}); err != nil {
+	// Using only the offer we need
+	offerId := s.matchOffer(taskInfo.Resources)
+
+	if _, err := driver.LaunchTasks([]*mesosproto.OfferID{offerId}, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{}); err != nil {
 		return nil, err
 	}
 
 	// TODO: Do not erase all the offers, only the one used
-	s.offers = make(map[string]*mesosproto.Offer)
+	s.removeOffer(offerId.GetValue())
 	s.Unlock()
 
 	// block until we get the container
-	taskStatus := <-s.statuses[ID]
-	delete(s.statuses, ID)
+	go func() {
+		taskStatus := <-s.statuses[ID]
+		//TODO: unblock chan in another way and use statuses to track resources
 
-	switch taskStatus.GetState() {
-	case mesosproto.TaskState_TASK_STAGING:
-	case mesosproto.TaskState_TASK_STARTING:
-	case mesosproto.TaskState_TASK_RUNNING:
-	case mesosproto.TaskState_TASK_FINISHED:
-	case mesosproto.TaskState_TASK_FAILED:
-		return nil, errors.New(taskStatus.GetMessage())
-	case mesosproto.TaskState_TASK_KILLED:
-	case mesosproto.TaskState_TASK_LOST:
-		return nil, errors.New(taskStatus.GetMessage())
-	case mesosproto.TaskState_TASK_ERROR:
-		return nil, errors.New(taskStatus.GetMessage())
-	}
-
+		switch taskStatus.GetState() {
+		case mesosproto.TaskState_TASK_STAGING:
+		case mesosproto.TaskState_TASK_STARTING:
+		case mesosproto.TaskState_TASK_RUNNING:
+		case mesosproto.TaskState_TASK_FINISHED:
+			delete(s.statuses, ID)
+		//	return nil, nil
+		case mesosproto.TaskState_TASK_FAILED:
+		//	return nil, errors.New(taskStatus.GetMessage())
+		case mesosproto.TaskState_TASK_KILLED:
+			delete(s.statuses, ID)
+		//	return nil, nil
+		case mesosproto.TaskState_TASK_LOST:
+			delete(s.statuses, ID)
+		//	return nil, errors.New(taskStatus.GetMessage())
+		case mesosproto.TaskState_TASK_ERROR:
+			//	return nil, errors.New(taskStatus.GetMessage())
+		}
+	}()
 	// Register the container immediately while waiting for a state refresh.
 	// Force a state refresh to pick up the newly created container.
 	s.RefreshContainers(true)

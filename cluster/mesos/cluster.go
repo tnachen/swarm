@@ -3,6 +3,7 @@ package mesos
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
@@ -38,6 +39,7 @@ var (
 	frameworkName       = "swarm"
 	dockerDaemonPort    = "2375"
 	defaultOfferTimeout = "10m"
+	errNotSupported     = errors.New("not supported with mesos")
 )
 
 // NewCluster for mesos Cluster creation
@@ -216,8 +218,18 @@ func (c *Cluster) RemoveImage(image *cluster.Image) ([]*dockerclient.ImageDelete
 }
 
 // Pull will pull images on the cluster nodes
-func (c *Cluster) Pull(name string, callback func(what, status string)) {
+func (c *Cluster) Pull(name string, authConfig *dockerclient.AuthConfig, callback func(what, status string)) {
 
+}
+
+// Load images
+func (c *Cluster) Load(imageReader io.Reader, callback func(what, status string)) {
+
+}
+
+// RenameContainer Rename a container
+func (c *Cluster) RenameContainer(container *cluster.Container, newName string) error {
+	return errNotSupported
 }
 
 // listNodes returns all the nodess in the cluster.

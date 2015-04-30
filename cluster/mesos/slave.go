@@ -184,14 +184,14 @@ func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dock
 	s.Lock()
 
 	// Using only the offer we need
-	offerId := s.matchOffer(taskInfo.Resources)
+	offerID := s.matchOffer(taskInfo.Resources)
 
-	if _, err := driver.LaunchTasks([]*mesosproto.OfferID{offerId}, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{}); err != nil {
+	if _, err := driver.LaunchTasks([]*mesosproto.OfferID{offerID}, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{}); err != nil {
 		return nil, err
 	}
 
 	// TODO: Do not erase all the offers, only the one used
-	s.removeOffer(offerId.GetValue())
+	s.removeOffer(offerID.GetValue())
 	s.Unlock()
 
 	// block until we get the container

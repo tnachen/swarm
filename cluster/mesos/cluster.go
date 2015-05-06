@@ -1,6 +1,8 @@
 package mesos
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/node"
+	"github.com/docker/swarm/scheduler/strategy"
 	"github.com/docker/swarm/state"
 	"github.com/mesos/mesos-go/mesosproto"
 	mesosscheduler "github.com/mesos/mesos-go/scheduler"
@@ -33,6 +36,8 @@ type Cluster struct {
 	scheduler    *scheduler.Scheduler
 	options      *cluster.Options
 	store        *state.Store
+
+	crs containerQueue
 }
 
 var (
@@ -115,34 +120,40 @@ func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
 	return nil
 }
 
+func generateTaskID() (string, error) {
+	id := make([]byte, 6)
+	if _, err := rand.Read(id); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(id), nil
+}
+
 // CreateContainer for container creation
 func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name string) (*cluster.Container, error) {
-
-	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), config)
+	taskID, err := generateTaskID()
 	if err != nil {
 		return nil, err
 	}
 
-	if nn, ok := c.slaves[n.ID]; ok {
-		container, err := nn.create(c.driver, config, name, true)
-		if err != nil {
-			return nil, err
-		}
-
-		if container == nil {
-			return nil, fmt.Errorf("Container failed to create")
-		}
-
-		// TODO: do not store the container as it might be a wrong ContainerID
-		// see TODO in slave.go
-		//st := &state.RequestedState{
-		//ID:     container.Id,
-		//Name:   name,
-		//Config: config,
-		//}
-		return container, nil //c.store.Add(container.Id, st)
+	cr := createRequest{
+		ID:        taskID,
+		config:    config,
+		name:      name,
+		error:     make(chan error),
+		container: make(chan *cluster.Container),
 	}
-	return nil, nil
+
+	c.crs.add(&cr)
+
+	select {
+	case container := <-cr.container:
+		return container, nil
+	case err := <-cr.error:
+		return nil, err
+	case <-time.After(5 * time.Second):
+		c.crs.remove(true, taskID)
+		return nil, strategy.ErrNoResourcesAvailable
+	}
 }
 
 // RemoveContainer to remove containers on mesos cluster
@@ -340,6 +351,8 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 			}
 		}(offerID, slaveID)
 	}
+
+	go c.crs.resourcesAdded()
 }
 
 // OfferRescinded method

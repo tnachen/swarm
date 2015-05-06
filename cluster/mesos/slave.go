@@ -1,9 +1,7 @@
 package mesos
 
 import (
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -115,20 +113,7 @@ func (s *slave) UsedCpus() int64 {
 	return s.TotalCpus() - int64(s.scalarResourceValue("cpus"))
 }
 
-func generateTaskID() (string, error) {
-	id := make([]byte, 6)
-	if _, err := rand.Read(id); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(id), nil
-}
-
-func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dockerclient.ContainerConfig, name string, pullImage bool) (*cluster.Container, error) {
-	ID, err := generateTaskID()
-	if err != nil {
-		return nil, err
-	}
-
+func (s *slave) create(ID string, driver *mesosscheduler.MesosSchedulerDriver, config *dockerclient.ContainerConfig, name string, pullImage bool) (*cluster.Container, error) {
 	s.statuses[ID] = make(chan *mesosproto.TaskStatus)
 
 	resources := []*mesosproto.Resource{}

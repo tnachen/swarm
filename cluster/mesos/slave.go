@@ -1,82 +1,29 @@
 package mesos
 
 import (
-	"crypto/rand"
-	"crypto/tls"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"net/http"
+	"fmt"
+	"sync"
 
 	"github.com/docker/swarm/cluster"
-	"github.com/docker/swarm/scheduler/node"
-	"github.com/gogo/protobuf/proto"
 	"github.com/mesos/mesos-go/mesosproto"
-	"github.com/mesos/mesos-go/mesosutil"
-	mesosscheduler "github.com/mesos/mesos-go/scheduler"
-	"github.com/samalba/dockerclient"
 )
 
 type slave struct {
-	cluster.Engine
+	sync.RWMutex
 
-	slaveID  *mesosproto.SlaveID
-	offers   map[string]*mesosproto.Offer
-	statuses map[string]chan *mesosproto.TaskStatus
+	id     string
+	offers map[string]*mesosproto.Offer
+	tasks  map[string]*task
+	engine *cluster.Engine
 }
 
-// NewSlave creates mesos slave agent
-func newSlave(addr string, overcommitRatio float64, offer *mesosproto.Offer) *slave {
-	slave := &slave{Engine: *cluster.NewEngine(addr, overcommitRatio)}
-	slave.offers = make(map[string]*mesosproto.Offer)
-	slave.statuses = make(map[string]chan *mesosproto.TaskStatus)
-	slave.slaveID = offer.SlaveId
-	slave.addOffer(offer)
-	return slave
-}
-
-func (s *slave) toNode() *node.Node {
-	return &node.Node{
-		ID:          s.slaveID.GetValue(),
-		IP:          s.IP,
-		Addr:        s.Addr,
-		Name:        s.Name,
-		Cpus:        s.Cpus,
-		Labels:      s.Labels,
-		Containers:  s.Containers(),
-		Images:      s.Images(),
-		UsedMemory:  s.UsedMemory(),
-		UsedCpus:    s.UsedCpus(),
-		TotalMemory: s.TotalMemory(),
-		TotalCpus:   s.TotalCpus(),
-		IsHealthy:   s.IsHealthy(),
+func newSlave(sid string, e *cluster.Engine) *slave {
+	return &slave{
+		id:     sid,
+		offers: make(map[string]*mesosproto.Offer),
+		tasks:  make(map[string]*task),
+		engine: e,
 	}
-}
-
-// connect to the docker engine and to the mesos slave to update the total mem and cpus
-func (s *slave) connect(config *tls.Config) error {
-	if err := s.Connect(config); err != nil {
-		return err
-	}
-	resp, err := http.Get("http://" + s.IP + ":5051/state.json")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	resources := struct {
-		Resources struct {
-			Cpus int64
-			Mem  int64
-		}
-	}{}
-	if err := json.NewDecoder(resp.Body).Decode(&resources); err != nil {
-		return err
-	}
-	s.Cpus = resources.Resources.Cpus
-	s.Memory = resources.Resources.Mem * 1024 * 1024
-
-	return nil
 }
 
 func (s *slave) addOffer(offer *mesosproto.Offer) {
@@ -85,134 +32,43 @@ func (s *slave) addOffer(offer *mesosproto.Offer) {
 	s.Unlock()
 }
 
+func (s *slave) addTask(task *task) {
+	s.tasks[task.TaskInfo.TaskId.GetValue()] = task
+}
+
 func (s *slave) removeOffer(offerID string) bool {
-	s.Lock()
-	defer s.Unlock()
-	_, ok := s.offers[offerID]
-	if ok {
+	found := false
+	_, found = s.offers[offerID]
+	if found {
 		delete(s.offers, offerID)
 	}
-	return ok
+	return found
 }
 
-func (s *slave) scalarResourceValue(name string) float64 {
-	var value float64
-	for _, offer := range s.offers {
-		for _, resource := range offer.Resources {
-			if *resource.Name == name {
-				value += *resource.Scalar.Value
-			}
-		}
-	}
-	return value
-}
-
-func (s *slave) UsedMemory() int64 {
-	return s.TotalMemory() - int64(s.scalarResourceValue("mem"))*1024*1024
-}
-
-func (s *slave) UsedCpus() int64 {
-	return s.TotalCpus() - int64(s.scalarResourceValue("cpus"))
-}
-
-func generateTaskID() (string, error) {
-	id := make([]byte, 6)
-	if _, err := rand.Read(id); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(id), nil
-}
-
-func (s *slave) create(driver *mesosscheduler.MesosSchedulerDriver, config *dockerclient.ContainerConfig, name string, pullImage bool) (*cluster.Container, error) {
-	ID, err := generateTaskID()
-	if err != nil {
-		return nil, err
-	}
-
-	s.statuses[ID] = make(chan *mesosproto.TaskStatus)
-
-	resources := []*mesosproto.Resource{}
-
-	if cpus := config.CpuShares; cpus > 0 {
-		resources = append(resources, mesosutil.NewScalarResource("cpus", float64(cpus)))
-	}
-
-	if mem := config.Memory; mem > 0 {
-		resources = append(resources, mesosutil.NewScalarResource("mem", float64(mem/1024/1024)))
-	}
-
-	taskInfo := &mesosproto.TaskInfo{
-		Name: &name,
-		TaskId: &mesosproto.TaskID{
-			Value: &ID,
-		},
-		SlaveId:   s.slaveID,
-		Resources: resources,
-		Command:   &mesosproto.CommandInfo{},
-	}
-
-	if len(config.Cmd) > 0 && config.Cmd[0] != "" {
-		taskInfo.Command.Value = &config.Cmd[0]
-	}
-
-	if len(config.Cmd) > 1 {
-		taskInfo.Command.Arguments = config.Cmd[1:]
-	}
-
-	taskInfo.Container = &mesosproto.ContainerInfo{
-		Type: mesosproto.ContainerInfo_DOCKER.Enum(),
-		Docker: &mesosproto.ContainerInfo_DockerInfo{
-			Image: &config.Image,
-		},
-	}
-
-	taskInfo.Command.Shell = proto.Bool(false)
-
+func (s *slave) removeTask(taskID string) bool {
 	s.Lock()
-	// TODO: Only use the offer we need
-	offerIds := []*mesosproto.OfferID{}
-	for _, offer := range s.offers {
-		offerIds = append(offerIds, offer.Id)
+	defer s.Unlock()
+	fmt.Println("removing task")
+	found := false
+	_, found = s.tasks[taskID]
+	if found {
+		delete(s.tasks, taskID)
 	}
+	return found
+}
 
-	if _, err := driver.LaunchTasks(offerIds, []*mesosproto.TaskInfo{taskInfo}, &mesosproto.Filters{}); err != nil {
-		return nil, err
-	}
+func (s *slave) empty() bool {
+	return len(s.offers) == 0 && len(s.tasks) == 0
+}
 
-	// TODO: Do not erase all the offers, only the one used
-	s.offers = make(map[string]*mesosproto.Offer)
-	s.Unlock()
+func (s *slave) getOffers() map[string]*mesosproto.Offer {
+	s.Lock()
+	defer s.Unlock()
+	return s.offers
+}
 
-	// block until we get the container
-	taskStatus := <-s.statuses[ID]
-	delete(s.statuses, ID)
-
-	switch taskStatus.GetState() {
-	case mesosproto.TaskState_TASK_STAGING:
-	case mesosproto.TaskState_TASK_STARTING:
-	case mesosproto.TaskState_TASK_RUNNING:
-	case mesosproto.TaskState_TASK_FINISHED:
-	case mesosproto.TaskState_TASK_FAILED:
-		return nil, errors.New(taskStatus.GetMessage())
-	case mesosproto.TaskState_TASK_KILLED:
-	case mesosproto.TaskState_TASK_LOST:
-		return nil, errors.New(taskStatus.GetMessage())
-	case mesosproto.TaskState_TASK_ERROR:
-		return nil, errors.New(taskStatus.GetMessage())
-	}
-
-	// Register the container immediately while waiting for a state refresh.
-	// Force a state refresh to pick up the newly created container.
-	s.RefreshContainers(true)
-
-	s.RLock()
-	defer s.RUnlock()
-
-	// TODO: We have to return the right container that was just created.
-	// Once we receive the ContainerID from the executor.
-	for _, container := range s.Containers() {
-		return container, nil
-	}
-
-	return nil, nil
+func (s *slave) getTasks() map[string]*task {
+	s.Lock()
+	defer s.Unlock()
+	return s.tasks
 }

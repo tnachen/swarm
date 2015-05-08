@@ -12,7 +12,6 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/docker/docker/pkg/units"
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/node"
@@ -98,10 +97,11 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, options *clu
 	cluster.driver = driver
 
 	status, err := driver.Start()
-	log.Debugf("Mesos driver started, status/err %v: %v", status, err)
 	if err != nil {
+		log.Debugf("Mesos driver started, status/err %v: %v", status, err)
 		return nil
 	}
+	log.Debugf("Mesos driver started, status %v", status)
 
 	return cluster
 }
@@ -115,7 +115,7 @@ func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
 	return nil
 }
 
-// CreateContainer for container creation
+// CreateContainer for container creation in Mesos task
 func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name string) (*cluster.Container, error) {
 
 	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), config)
@@ -123,26 +123,102 @@ func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name str
 		return nil, err
 	}
 
-	if nn, ok := c.slaves[n.ID]; ok {
-		container, err := nn.create(c.driver, config, name, true)
-		if err != nil {
-			return nil, err
-		}
-
-		if container == nil {
-			return nil, fmt.Errorf("Container failed to create")
-		}
-
-		// TODO: do not store the container as it might be a wrong ContainerID
-		// see TODO in slave.go
-		//st := &state.RequestedState{
-		//ID:     container.Id,
-		//Name:   name,
-		//Config: config,
-		//}
-		return container, nil //c.store.Add(container.Id, st)
+	task, err := newTask(config, name, n.ID)
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
+
+	s, ok := c.slaves[n.ID]
+	if !ok {
+		return nil, nil
+	}
+
+	s.Lock()
+	// TODO: Only use the offer we need
+	offerIds := []*mesosproto.OfferID{}
+	for _, offer := range c.slaves[n.ID].offers {
+		offerIds = append(offerIds, offer.Id)
+	}
+
+	if _, err := c.driver.LaunchTasks(offerIds, []*mesosproto.TaskInfo{&task.TaskInfo}, &mesosproto.Filters{}); err != nil {
+		s.Unlock()
+		return nil, err
+	}
+
+	s.addTask(task)
+
+	// TODO: Do not erase all the offers, only the one used
+	for _, offer := range s.offers {
+		c.removeOffer(offer)
+	}
+	s.Unlock()
+	// block until we get the container
+	finished, err := c.monitorTask(task)
+
+	if err != nil {
+		//remove task
+		s.removeTask(task.TaskInfo.TaskId.GetValue())
+		return nil, err
+	}
+	if !finished {
+		go func() {
+			for {
+				finished, err := c.monitorTask(task)
+				if err != nil {
+					// TODO proper error message
+					log.Error(err)
+					break
+				}
+				if finished {
+					break
+				}
+			}
+			//remove task
+		}()
+	}
+
+	// Register the container immediately while waiting for a state refresh.
+	// Force a state refresh to pick up the newly created container.
+	s.engine.RefreshContainers(true)
+
+	// TODO: We have to return the right container that was just created.
+	// Once we receive the ContainerID from the executor.
+	for _, container := range s.engine.Containers() {
+		return container, nil
+	}
+
+	return nil, fmt.Errorf("Container failed to create")
+
+	// TODO: do not store the container as it might be a wrong ContainerID
+	// see TODO in slave.go
+	//st := &state.RequestedState{
+	//ID:     container.Id,
+	//Name:   name,
+	//Config: config,
+	//}
+	//return container, nil //c.store.Add(container.Id, st)
+}
+
+func (c *Cluster) monitorTask(task *task) (bool, error) {
+	taskStatus := task.getStatus()
+
+	switch taskStatus.GetState() {
+	case mesosproto.TaskState_TASK_STAGING:
+	case mesosproto.TaskState_TASK_STARTING:
+	case mesosproto.TaskState_TASK_RUNNING:
+	case mesosproto.TaskState_TASK_FINISHED:
+		return true, nil
+	case mesosproto.TaskState_TASK_FAILED:
+		return true, errors.New(taskStatus.GetMessage())
+	case mesosproto.TaskState_TASK_KILLED:
+		return true, nil
+	case mesosproto.TaskState_TASK_LOST:
+		return true, errors.New(taskStatus.GetMessage())
+	case mesosproto.TaskState_TASK_ERROR:
+		return true, errors.New(taskStatus.GetMessage())
+	}
+
+	return false, nil
 }
 
 // RemoveContainer to remove containers on mesos cluster
@@ -156,8 +232,8 @@ func (c *Cluster) Images() []*cluster.Image {
 	defer c.RUnlock()
 
 	out := []*cluster.Image{}
-	for _, n := range c.slaves {
-		out = append(out, n.Images()...)
+	for _, s := range c.slaves {
+		out = append(out, s.engine.Images()...)
 	}
 
 	return out
@@ -172,8 +248,8 @@ func (c *Cluster) Image(IDOrName string) *cluster.Image {
 
 	c.RLock()
 	defer c.RUnlock()
-	for _, n := range c.slaves {
-		if image := n.Image(IDOrName); image != nil {
+	for _, s := range c.slaves {
+		if image := s.engine.Image(IDOrName); image != nil {
 			return image
 		}
 	}
@@ -187,8 +263,8 @@ func (c *Cluster) Containers() []*cluster.Container {
 	defer c.RUnlock()
 
 	out := []*cluster.Container{}
-	for _, n := range c.slaves {
-		out = append(out, n.Containers()...)
+	for _, s := range c.slaves {
+		out = append(out, s.engine.Containers()...)
 	}
 
 	return out
@@ -203,8 +279,8 @@ func (c *Cluster) Container(IDOrName string) *cluster.Container {
 
 	c.RLock()
 	defer c.RUnlock()
-	for _, n := range c.slaves {
-		if container := n.Container(IDOrName); container != nil {
+	for _, s := range c.slaves {
+		if container := s.engine.Container(IDOrName); container != nil {
 			return container
 		}
 	}
@@ -232,6 +308,18 @@ func (c *Cluster) RenameContainer(container *cluster.Container, newName string) 
 	return errNotSupported
 }
 
+func scalarResourceValue(offers map[string]*mesosproto.Offer, name string) float64 {
+	var value float64
+	for _, offer := range offers {
+		for _, resource := range offer.Resources {
+			if *resource.Name == name {
+				value += *resource.Scalar.Value
+			}
+		}
+	}
+	return value
+}
+
 // listNodes returns all the nodess in the cluster.
 func (c *Cluster) listNodes() []*node.Node {
 	c.RLock()
@@ -239,46 +327,42 @@ func (c *Cluster) listNodes() []*node.Node {
 
 	out := []*node.Node{}
 	for _, s := range c.slaves {
-		out = append(out, s.toNode())
+		n := node.NewNode(s.engine)
+		n.ID = s.id
+		n.TotalCpus = int64(scalarResourceValue(s.offers, "cpus"))
+		n.UsedCpus = 0
+		n.TotalMemory = int64(scalarResourceValue(s.offers, "mem")) * 1024 * 1024
+		n.UsedMemory = 0
+		out = append(out, n)
 	}
-
 	return out
 }
 
-// listSlaves returns all the slaves in the cluster.
-func (c *Cluster) listSlaves() []*slave {
-	c.RLock()
-	defer c.RUnlock()
-
-	out := []*slave{}
+func (c *Cluster) listOffers() []*mesosproto.Offer {
+	list := []*mesosproto.Offer{}
 	for _, s := range c.slaves {
-		out = append(out, s)
+		for _, offer := range s.offers {
+			list = append(list, offer)
+		}
 	}
-	return out
+	return list
 }
 
 // Info gives minimal information about containers and resources on the mesos cluster
 func (c *Cluster) Info() [][2]string {
+	offers := c.listOffers()
 	info := [][2]string{
 		{"\bStrategy", c.scheduler.Strategy()},
 		{"\bFilters", c.scheduler.Filters()},
-		{"\bSlaves", fmt.Sprintf("%d", len(c.slaves))},
+		{"\bOffers", fmt.Sprintf("%d", len(offers))},
 	}
 
-	slaves := c.listSlaves()
-	sort.Sort(SlaveSorter(slaves))
+	sort.Sort(offerSorter(offers))
 
-	for _, slave := range slaves {
-		info = append(info, [2]string{slave.Name, slave.Addr})
-		info = append(info, [2]string{" └ Containers", fmt.Sprintf("%d", len(slave.Containers()))})
-		info = append(info, [2]string{" └ Reserved CPUs", fmt.Sprintf("%d / %d", slave.UsedCpus(), slave.TotalCpus())})
-		info = append(info, [2]string{" └ Reserved Memory", fmt.Sprintf("%s / %s", units.BytesSize(float64(slave.UsedMemory())), units.BytesSize(float64(slave.TotalMemory())))})
-		info = append(info, [2]string{" └ Offers", fmt.Sprintf("%d", len(slave.offers))})
-		for _, offer := range slave.offers {
-			info = append(info, [2]string{" Offer", offer.Id.GetValue()})
-			for _, resource := range offer.Resources {
-				info = append(info, [2]string{"  └ " + *resource.Name, fmt.Sprintf("%v", resource)})
-			}
+	for _, offer := range offers {
+		info = append(info, [2]string{" Offer", offer.Id.GetValue()})
+		for _, resource := range offer.Resources {
+			info = append(info, [2]string{"  └ " + *resource.Name, fmt.Sprintf("%v", resource)})
 		}
 	}
 
@@ -305,41 +389,60 @@ func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mes
 	log.WithFields(log.Fields{"name": "mesos", "offers": len(offers)}).Debug("Offers received")
 
 	for _, offer := range offers {
-		offerID := offer.Id
 		slaveID := offer.SlaveId.GetValue()
-		if slave, ok := c.slaves[slaveID]; ok {
-			slave.addOffer(offer)
-		} else {
-			slave := newSlave(*offer.Hostname+":"+dockerDaemonPort, 0, offer)
-			err := slave.connect(c.options.TLSConfig)
-			if err != nil {
+		s, ok := c.slaves[slaveID]
+		if !ok {
+			engine := cluster.NewEngine(*offer.Hostname+":"+dockerDaemonPort, 0)
+			if err := engine.Connect(c.options.TLSConfig); err != nil {
 				log.Error(err)
 			} else {
-				c.slaves[slaveID] = slave
+				s = newSlave(slaveID, engine)
+				c.slaves[slaveID] = s
 			}
 		}
-		go func(id *mesosproto.OfferID, slaveId string) {
-			offerTimeout := os.Getenv("SWARM_MESOS_OFFER_TIMEOUT")
-			if offerTimeout == "" {
-				offerTimeout = defaultOfferTimeout
-			}
-
-			d, err := time.ParseDuration(offerTimeout)
-			if err != nil {
-				d = 10 * time.Minute
-			}
-			<-time.After(d)
-			if slave, ok := c.slaves[slaveID]; ok {
-				if slave.removeOffer(id.GetValue()) {
-					if _, err := c.driver.DeclineOffer(id, &mesosproto.Filters{}); err != nil {
-						log.WithFields(log.Fields{"name": "mesos"}).Errorf("Error while declining offer %q: %v", id.GetValue(), err)
-					} else {
-						log.WithFields(log.Fields{"name": "mesos"}).Debugf("Offer %q declined successfully", id.GetValue())
-					}
-				}
-			}
-		}(offerID, slaveID)
+		s.addOffer(offer)
 	}
+}
+
+func (c *Cluster) addOffer(offer *mesosproto.Offer) {
+	s, ok := c.slaves[offer.SlaveId.GetValue()]
+	if !ok {
+		return
+	}
+	s.addOffer(offer)
+	go func(offer *mesosproto.Offer) {
+		offerTimeout := os.Getenv("SWARM_MESOS_OFFER_TIMEOUT")
+		if offerTimeout == "" {
+			offerTimeout = defaultOfferTimeout
+		}
+
+		d, err := time.ParseDuration(offerTimeout)
+		if err != nil {
+			d = 10 * time.Minute
+		}
+		<-time.After(d)
+		if c.removeOffer(offer) {
+			if _, err := c.driver.DeclineOffer(offer.Id, &mesosproto.Filters{}); err != nil {
+				log.WithFields(log.Fields{"name": "mesos"}).Errorf("Error while declining offer %q: %v", offer.Id.GetValue(), err)
+			} else {
+				log.WithFields(log.Fields{"name": "mesos"}).Debugf("Offer %q declined successfully", offer.Id.GetValue())
+			}
+		}
+	}(offer)
+}
+
+func (c *Cluster) removeOffer(offer *mesosproto.Offer) bool {
+	log.WithFields(log.Fields{"name": "mesos", "offerID": offer.Id.String()}).Debug("Removing offer")
+	s, ok := c.slaves[offer.SlaveId.GetValue()]
+	if !ok {
+		return false
+	}
+	found := s.removeOffer(offer.Id.GetValue())
+	if s.empty() {
+		// Disconnect from engine
+		delete(c.slaves, offer.SlaveId.GetValue())
+	}
+	return found
 }
 
 // OfferRescinded method
@@ -349,11 +452,14 @@ func (c *Cluster) OfferRescinded(mesosscheduler.SchedulerDriver, *mesosproto.Off
 // StatusUpdate method
 func (c *Cluster) StatusUpdate(_ mesosscheduler.SchedulerDriver, taskStatus *mesosproto.TaskStatus) {
 	log.WithFields(log.Fields{"name": "mesos", "state": taskStatus.State.String()}).Debug("Status update")
-
-	if slave, ok := c.slaves[taskStatus.SlaveId.GetValue()]; ok {
-		if ch, ok := slave.statuses[taskStatus.TaskId.GetValue()]; ok {
-			ch <- taskStatus
-		}
+	taskID := taskStatus.TaskId.GetValue()
+	slaveID := taskStatus.SlaveId.GetValue()
+	s, ok := c.slaves[slaveID]
+	if !ok {
+		return
+	}
+	if task, ok := s.tasks[taskID]; ok {
+		task.sendStatus(taskStatus)
 	} else {
 		var reason = ""
 		if taskStatus.Reason != nil {
@@ -393,7 +499,7 @@ func (c *Cluster) RANDOMENGINE() (*cluster.Engine, error) {
 		return nil, err
 	}
 	if n != nil {
-		return &c.slaves[n.ID].Engine, nil
+		return c.slaves[n.ID].engine, nil
 	}
 	return nil, nil
 }

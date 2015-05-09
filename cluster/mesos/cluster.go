@@ -116,7 +116,7 @@ func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
 }
 
 // CreateContainer for container creation in Mesos task
-func (c *Cluster) CreateContainer(config *dockerclient.ContainerConfig, name string) (*cluster.Container, error) {
+func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) (*cluster.Container, error) {
 
 	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), config)
 	if err != nil {
@@ -494,7 +494,7 @@ func (c *Cluster) Error(d mesosscheduler.SchedulerDriver, msg string) {
 
 // RANDOMENGINE returns a random engine.
 func (c *Cluster) RANDOMENGINE() (*cluster.Engine, error) {
-	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), &dockerclient.ContainerConfig{})
+	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), &cluster.ContainerConfig{})
 	if err != nil {
 		return nil, err
 	}

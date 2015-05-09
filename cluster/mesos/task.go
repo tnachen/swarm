@@ -4,10 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
+	"github.com/docker/swarm/cluster"
 	"github.com/gogo/protobuf/proto"
 	"github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
-	"github.com/samalba/dockerclient"
 )
 
 type task struct {
@@ -16,7 +16,7 @@ type task struct {
 	updates chan *mesosproto.TaskStatus
 }
 
-func newTask(config *dockerclient.ContainerConfig, name, slaveID string) (*task, error) {
+func newTask(config *cluster.ContainerConfig, name, slaveID string) (*task, error) {
 	task := task{
 		updates: make(chan *mesosproto.TaskStatus),
 	}

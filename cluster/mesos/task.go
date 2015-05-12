@@ -1,6 +1,8 @@
 package mesos
 
 import (
+	"fmt"
+
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/swarm/cluster"
 	"github.com/gogo/protobuf/proto"
@@ -56,6 +58,10 @@ func newTask(config *cluster.ContainerConfig, name, slaveID string) (*task, erro
 		Docker: &mesosproto.ContainerInfo_DockerInfo{
 			Image: &config.Image,
 		},
+	}
+
+	for key, value := range config.Labels {
+		taskInfo.Container.Docker.Parameters = append(taskInfo.Container.Docker.Parameters, &mesosproto.Parameter{Key: proto.String("label"), Value: proto.String(fmt.Sprintf("%s=%s", key, value))})
 	}
 
 	taskInfo.Command.Shell = proto.Bool(false)

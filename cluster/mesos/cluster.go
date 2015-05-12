@@ -118,6 +118,9 @@ func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
 // CreateContainer for container creation in Mesos task
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) (*cluster.Container, error) {
 
+	// save the name in labels as the mesos containerizer will override it
+	config.SetNamespacedLabel("mesos.name", name)
+
 	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), config)
 	if err != nil {
 		return nil, err
@@ -264,7 +267,12 @@ func (c *Cluster) Containers() []*cluster.Container {
 
 	out := []*cluster.Container{}
 	for _, s := range c.slaves {
-		out = append(out, s.engine.Containers()...)
+		for _, container := range s.engine.Containers() {
+			if name := container.Config.NamespacedLabel("mesos.name"); name != "" {
+				container.Names = append([]string{"/" + name}, container.Names...)
+			}
+			out = append(out, container)
+		}
 	}
 
 	return out
@@ -281,6 +289,9 @@ func (c *Cluster) Container(IDOrName string) *cluster.Container {
 	defer c.RUnlock()
 	for _, s := range c.slaves {
 		if container := s.engine.Container(IDOrName); container != nil {
+			if name := container.Config.NamespacedLabel("mesos.name"); name != "" {
+				container.Names = append([]string{"/" + name}, container.Names...)
+			}
 			return container
 		}
 	}

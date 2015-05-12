@@ -1,9 +1,7 @@
 package mesos
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-
+	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/swarm/cluster"
 	"github.com/gogo/protobuf/proto"
 	"github.com/mesos/mesos-go/mesosproto"
@@ -21,10 +19,7 @@ func newTask(config *cluster.ContainerConfig, name, slaveID string) (*task, erro
 		updates: make(chan *mesosproto.TaskStatus),
 	}
 
-	ID, err := generateTaskID()
-	if err != nil {
-		return nil, err
-	}
+	ID := stringid.GenerateRandomID()
 
 	resources := []*mesosproto.Resource{}
 
@@ -67,14 +62,6 @@ func newTask(config *cluster.ContainerConfig, name, slaveID string) (*task, erro
 
 	task.TaskInfo = taskInfo
 	return &task, nil
-}
-
-func generateTaskID() (string, error) {
-	id := make([]byte, 6)
-	if _, err := rand.Read(id); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(id), nil
 }
 
 func (t *task) sendStatus(status *mesosproto.TaskStatus) {

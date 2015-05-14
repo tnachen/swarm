@@ -15,6 +15,7 @@ import (
 	"github.com/docker/swarm/cluster"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/node"
+	"github.com/docker/swarm/scheduler/strategy"
 	"github.com/docker/swarm/state"
 	"github.com/mesos/mesos-go/mesosproto"
 	mesosscheduler "github.com/mesos/mesos-go/scheduler"
@@ -32,6 +33,8 @@ type Cluster struct {
 	scheduler    *scheduler.Scheduler
 	options      *cluster.Options
 	store        *state.Store
+
+	pendingTasks *queue
 }
 
 var (
@@ -51,6 +54,8 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, options *clu
 		options:   options,
 		store:     store,
 	}
+
+	cluster.pendingTasks = &queue{c: cluster}
 
 	// Empty string is accepted by the scheduler.
 	user := os.Getenv("SWARM_MESOS_USER")
@@ -117,89 +122,23 @@ func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
 
 // CreateContainer for container creation in Mesos task
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) (*cluster.Container, error) {
-
-	// save the name in labels as the mesos containerizer will override it
-	config.SetNamespacedLabel("mesos.name", name)
-
-	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), config)
-	if err != nil {
-		return nil, err
-	}
-
-	task, err := newTask(config, name, n.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	s, ok := c.slaves[n.ID]
-	if !ok {
-		return nil, nil
-	}
-
-	s.Lock()
-	// TODO: Only use the offer we need
-	offerIds := []*mesosproto.OfferID{}
-	for _, offer := range c.slaves[n.ID].offers {
-		offerIds = append(offerIds, offer.Id)
-	}
-
-	if _, err := c.driver.LaunchTasks(offerIds, []*mesosproto.TaskInfo{&task.TaskInfo}, &mesosproto.Filters{}); err != nil {
-		s.Unlock()
-		return nil, err
-	}
-
-	s.addTask(task)
-
-	// TODO: Do not erase all the offers, only the one used
-	for _, offer := range s.offers {
-		c.removeOffer(offer)
-	}
-	s.Unlock()
-	// block until we get the container
-	finished, err := c.monitorTask(task)
+	task, err := newTask(config, name)
 
 	if err != nil {
-		//remove task
-		s.removeTask(task.TaskInfo.TaskId.GetValue())
 		return nil, err
 	}
-	if !finished {
-		go func() {
-			for {
-				finished, err := c.monitorTask(task)
-				if err != nil {
-					// TODO proper error message
-					log.Error(err)
-					break
-				}
-				if finished {
-					break
-				}
-			}
-			//remove task
-		}()
-	}
 
-	// Register the container immediately while waiting for a state refresh.
-	// Force a state refresh to pick up the newly created container.
-	s.engine.RefreshContainers(true)
+	go c.pendingTasks.add(task)
 
-	// TODO: We have to return the right container that was just created.
-	// Once we receive the ContainerID from the executor.
-	for _, container := range s.engine.Containers() {
+	select {
+	case container := <-task.container:
 		return container, nil
+	case err := <-task.error:
+		return nil, err
+	case <-time.After(5 * time.Second):
+		c.pendingTasks.remove(true, task.TaskId.GetValue())
+		return nil, strategy.ErrNoResourcesAvailable
 	}
-
-	return nil, fmt.Errorf("Container failed to create")
-
-	// TODO: do not store the container as it might be a wrong ContainerID
-	// see TODO in slave.go
-	//st := &state.RequestedState{
-	//ID:     container.Id,
-	//Name:   name,
-	//Config: config,
-	//}
-	//return container, nil //c.store.Add(container.Id, st)
 }
 
 func (c *Cluster) monitorTask(task *task) (bool, error) {

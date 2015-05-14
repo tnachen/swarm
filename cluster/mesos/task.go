@@ -14,59 +14,65 @@ type task struct {
 	mesosproto.TaskInfo
 
 	updates chan *mesosproto.TaskStatus
+
+	config    *cluster.ContainerConfig
+	error     chan error
+	container chan *cluster.Container
 }
 
-func newTask(config *cluster.ContainerConfig, name, slaveID string) (*task, error) {
-	task := task{
-		updates: make(chan *mesosproto.TaskStatus),
-	}
+func (t *task) build(slaveID string) {
+	t.Command = &mesosproto.CommandInfo{Shell: proto.Bool(false)}
 
-	ID := stringid.GenerateRandomID()
-
-	resources := []*mesosproto.Resource{}
-
-	if cpus := config.CpuShares; cpus > 0 {
-		resources = append(resources, mesosutil.NewScalarResource("cpus", float64(cpus)))
-	}
-
-	if mem := config.Memory; mem > 0 {
-		resources = append(resources, mesosutil.NewScalarResource("mem", float64(mem/1024/1024)))
-	}
-
-	taskInfo := mesosproto.TaskInfo{
-		Name: &name,
-		TaskId: &mesosproto.TaskID{
-			Value: &ID,
-		},
-		SlaveId: &mesosproto.SlaveID{
-			Value: &slaveID,
-		},
-		Resources: resources,
-		Command:   &mesosproto.CommandInfo{},
-	}
-
-	if len(config.Cmd) > 0 && config.Cmd[0] != "" {
-		taskInfo.Command.Value = &config.Cmd[0]
-	}
-
-	if len(config.Cmd) > 1 {
-		taskInfo.Command.Arguments = config.Cmd[1:]
-	}
-
-	taskInfo.Container = &mesosproto.ContainerInfo{
+	t.Container = &mesosproto.ContainerInfo{
 		Type: mesosproto.ContainerInfo_DOCKER.Enum(),
 		Docker: &mesosproto.ContainerInfo_DockerInfo{
-			Image: &config.Image,
+			Image: &t.config.Image,
 		},
 	}
 
-	for key, value := range config.Labels {
-		taskInfo.Container.Docker.Parameters = append(taskInfo.Container.Docker.Parameters, &mesosproto.Parameter{Key: proto.String("label"), Value: proto.String(fmt.Sprintf("%s=%s", key, value))})
+	if cpus := t.config.CpuShares; cpus > 0 {
+		t.Resources = append(t.Resources, mesosutil.NewScalarResource("cpus", float64(cpus)))
 	}
 
-	taskInfo.Command.Shell = proto.Bool(false)
+	if mem := t.config.Memory; mem > 0 {
+		t.Resources = append(t.Resources, mesosutil.NewScalarResource("mem", float64(mem/1024/1024)))
+	}
 
-	task.TaskInfo = taskInfo
+	if len(t.config.Cmd) > 0 && t.config.Cmd[0] != "" {
+		t.Command.Value = &t.config.Cmd[0]
+	}
+
+	if len(t.config.Cmd) > 1 {
+		t.Command.Arguments = t.config.Cmd[1:]
+	}
+
+	for key, value := range t.config.Labels {
+		t.Container.Docker.Parameters = append(t.Container.Docker.Parameters, &mesosproto.Parameter{Key: proto.String("label"), Value: proto.String(fmt.Sprintf("%s=%s", key, value))})
+	}
+
+	t.SlaveId = &mesosproto.SlaveID{Value: &slaveID}
+}
+
+func newTask(config *cluster.ContainerConfig, name string) (*task, error) {
+	// save the name in labels as the mesos containerizer will override it
+	config.SetNamespacedLabel("mesos.name", name)
+
+	task := task{
+		updates: make(chan *mesosproto.TaskStatus),
+
+		config:    config,
+		error:     make(chan error),
+		container: make(chan *cluster.Container),
+	}
+
+	ID := stringid.TruncateID(stringid.GenerateRandomID())
+	if name != "" {
+		ID = name + "." + ID
+	}
+
+	task.Name = &name
+	task.TaskId = &mesosproto.TaskID{Value: &ID}
+
 	return &task, nil
 }
 

@@ -337,6 +337,8 @@ func (c *Cluster) Disconnected(mesosscheduler.SchedulerDriver) {
 // ResourceOffers method
 func (c *Cluster) ResourceOffers(_ mesosscheduler.SchedulerDriver, offers []*mesosproto.Offer) {
 	log.WithFields(log.Fields{"name": "mesos", "offers": len(offers)}).Debug("Offers received")
+	c.Lock()
+	defer c.Unlock()
 
 	for _, offer := range offers {
 		slaveID := offer.SlaveId.GetValue()
@@ -444,6 +446,8 @@ func (c *Cluster) Error(d mesosscheduler.SchedulerDriver, msg string) {
 
 // RANDOMENGINE returns a random engine.
 func (c *Cluster) RANDOMENGINE() (*cluster.Engine, error) {
+	c.RLock()
+	defer c.RUnlock()
 	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), &cluster.ContainerConfig{})
 	if err != nil {
 		return nil, err

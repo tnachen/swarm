@@ -26,7 +26,7 @@ func formatResource(resource *mesosproto.Resource) string {
 	return "?"
 }
 
-func sumScalarResourceValue(offers map[string]*mesosproto.Offer, name string) float64 {
+func sumScalarResourceValue(offers []*mesosproto.Offer, name string) float64 {
 	var value float64
 	for _, offer := range offers {
 		for _, resource := range offer.Resources {

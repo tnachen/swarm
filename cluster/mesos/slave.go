@@ -12,6 +12,8 @@ type slave struct {
 
 	id     string
 	offers map[string]*mesosproto.Offer
+	cpus   int64
+	mem    int64
 	tasks  map[string]*task
 	engine *cluster.Engine
 }
@@ -28,6 +30,9 @@ func newSlave(sid string, e *cluster.Engine) *slave {
 func (s *slave) addOffer(offer *mesosproto.Offer) {
 	s.Lock()
 	s.offers[offer.Id.GetValue()] = offer
+	offers := []*mesosproto.Offer{offer}
+	s.cpus += int64(sumScalarResourceValue(offers, "cpus"))
+	s.mem += int64(sumScalarResourceValue(offers, "mem")) * 1024 * 1024
 	s.Unlock()
 }
 
@@ -37,12 +42,16 @@ func (s *slave) addTask(task *task) {
 	s.Unlock()
 }
 
-func (s *slave) removeOffer(offerID string) bool {
+func (s *slave) removeOffer(offerID string, used bool) bool {
 	s.Lock()
 	defer s.Unlock()
-	found := false
-	_, found = s.offers[offerID]
+	offer, found := s.offers[offerID]
 	if found {
+		if !used {
+			offers := []*mesosproto.Offer{offer}
+			s.cpus -= int64(sumScalarResourceValue(offers, "cpus"))
+			s.mem -= int64(sumScalarResourceValue(offers, "mem")) * 1024 * 1024
+		}
 		delete(s.offers, offerID)
 	}
 	return found
@@ -63,12 +72,6 @@ func (s *slave) empty() bool {
 	s.RLock()
 	defer s.RUnlock()
 	return len(s.offers) == 0 && len(s.tasks) == 0
-}
-
-func (s *slave) getOffers() map[string]*mesosproto.Offer {
-	s.RLock()
-	defer s.RUnlock()
-	return s.offers
 }
 
 func (s *slave) getTasks() map[string]*task {

@@ -12,7 +12,6 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/swarm/cluster"
-	"github.com/docker/swarm/cluster/mesos/queue"
 	"github.com/docker/swarm/scheduler"
 	"github.com/docker/swarm/scheduler/node"
 	"github.com/docker/swarm/scheduler/strategy"
@@ -37,7 +36,7 @@ type Cluster struct {
 	TLSConfig        *tls.Config
 	options          *cluster.DriverOpts
 	offerTimeout     time.Duration
-	pendingTasks     *queue.Queue
+	pendingTasks     *Queue
 }
 
 const (
@@ -67,7 +66,7 @@ func NewCluster(scheduler *scheduler.Scheduler, store *state.Store, TLSConfig *t
 		offerTimeout:     defaultOfferTimeout,
 	}
 
-	cluster.pendingTasks = queue.NewQueue()
+	cluster.pendingTasks = NewQueue(cluster)
 
 	// Empty string is accepted by the scheduler.
 	user, _ := options.String("mesos.user", "SWARM_MESOS_USER")
@@ -130,20 +129,24 @@ func (c *Cluster) RegisterEventHandler(h cluster.EventHandler) error {
 
 // CreateContainer for container creation in Mesos task
 func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) (*cluster.Container, error) {
-	task, err := newTask(c, config, name)
+	t, err := newTask(c, config, name)
 	if err != nil {
 		return nil, err
 	}
 
-	go c.pendingTasks.Add(task)
+	go func(t *task) {
+		if len(c.scheduleTasks([]*task{t})) == 0 {
+			c.pendingTasks.Add(t)
+		}
+	}(t)
 
 	select {
-	case container := <-task.container:
+	case container := <-t.container:
 		return formatContainer(container), nil
-	case err := <-task.error:
+	case err := <-t.error:
 		return nil, err
 	case <-time.After(taskCreationTimeout):
-		c.pendingTasks.Remove(task)
+		c.pendingTasks.Remove(t)
 		return nil, strategy.ErrNoResourcesAvailable
 	}
 }
@@ -267,9 +270,9 @@ func (c *Cluster) listNodes() []*node.Node {
 	for _, s := range c.slaves {
 		n := node.NewNode(s.engine)
 		n.ID = s.id
-		n.TotalCpus = int64(sumScalarResourceValue(s.offers, "cpus"))
+		n.TotalCpus = s.cpus
 		n.UsedCpus = 0
-		n.TotalMemory = int64(sumScalarResourceValue(s.offers, "mem")) * 1024 * 1024
+		n.TotalMemory = s.mem
 		n.UsedMemory = 0
 		out = append(out, n)
 	}
@@ -295,7 +298,7 @@ func (c *Cluster) TotalMemory() int64 {
 	defer c.RUnlock()
 	var totalMemory int64
 	for _, s := range c.slaves {
-		totalMemory += int64(sumScalarResourceValue(s.offers, "mem")) * 1024 * 1024
+		totalMemory += s.mem
 	}
 	return totalMemory
 }
@@ -306,7 +309,7 @@ func (c *Cluster) TotalCpus() int64 {
 	defer c.RUnlock()
 	var totalCpus int64
 	for _, s := range c.slaves {
-		totalCpus += int64(sumScalarResourceValue(s.offers, "cpus"))
+		totalCpus += s.cpus
 	}
 	return totalCpus
 }
@@ -341,23 +344,25 @@ func (c *Cluster) addOffer(offer *mesosproto.Offer) {
 	go func(offer *mesosproto.Offer) {
 		time.Sleep(c.offerTimeout)
 		// declining Mesos offers to make them available to other Mesos services
-		if c.removeOffer(offer) {
+		c.Lock()
+		if c.removeOffer(offer, false) {
 			if _, err := c.driver.DeclineOffer(offer.Id, &mesosproto.Filters{}); err != nil {
 				log.WithFields(log.Fields{"name": "mesos"}).Errorf("Error while declining offer %q: %v", offer.Id.GetValue(), err)
 			} else {
 				log.WithFields(log.Fields{"name": "mesos"}).Debugf("Offer %q declined successfully", offer.Id.GetValue())
 			}
 		}
+		c.Unlock()
 	}(offer)
 }
 
-func (c *Cluster) removeOffer(offer *mesosproto.Offer) bool {
+func (c *Cluster) removeOffer(offer *mesosproto.Offer, used bool) bool {
 	log.WithFields(log.Fields{"name": "mesos", "offerID": offer.Id.String()}).Debug("Removing offer")
 	s, ok := c.slaves[offer.SlaveId.GetValue()]
 	if !ok {
 		return false
 	}
-	found := s.removeOffer(offer.Id.GetValue())
+	found := s.removeOffer(offer.Id.GetValue(), used)
 	if s.empty() {
 		// Disconnect from engine
 		delete(c.slaves, offer.SlaveId.GetValue())
@@ -365,101 +370,123 @@ func (c *Cluster) removeOffer(offer *mesosproto.Offer) bool {
 	return found
 }
 
-func (c *Cluster) scheduleTask(t *task) bool {
+func (c *Cluster) placeTask(task *task) *slave {
 	c.scheduler.Lock()
 	defer c.scheduler.Unlock()
 
-	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), t.config)
+	n, err := c.scheduler.SelectNodeForContainer(c.listNodes(), task.config)
 	if err != nil {
-		return false
+		return nil
 	}
 	s, ok := c.slaves[n.ID]
 	if !ok {
-		t.error <- fmt.Errorf("Unable to create on slave %q", n.ID)
-		return true
+		task.error <- fmt.Errorf("Unable to create on slave %q", n.ID)
+		return nil
 	}
 
-	// build the offer from it's internal config and set the slaveID
-	t.build(n.ID)
+	task.build(n.ID)
+	s.addTask(task)
+	return s
+}
 
+func (c *Cluster) Process(tasks []*task) []*task {
+	return c.scheduleTasks(tasks)
+}
+
+// scheduleTasks schedules and launches the tasks to mesos driver, and return the tasks
+// that was successfully placed.
+func (c *Cluster) scheduleTasks(tasks []*task) []*task {
+	// Keep a map of slaves to tasks scheduled
+	usedSlaves := make(map[*slave][]*task)
+	scheduled := []*task{}
+	taskInfos := []*mesosproto.TaskInfo{}
 	c.Lock()
-	// TODO: Only use the offer we need
-	offerIDs := []*mesosproto.OfferID{}
-	for _, offer := range c.slaves[n.ID].offers {
-		offerIDs = append(offerIDs, offer.Id)
+	for _, t := range tasks {
+		if s := c.placeTask(t); s != nil {
+			ts, ok := usedSlaves[s]
+			if !ok {
+				ts = []*task{t}
+				usedSlaves[s] = ts
+			} else {
+				ts = append(ts, t)
+			}
+			scheduled = append(scheduled, t)
+			taskInfos = append(taskInfos, &t.TaskInfo)
+		}
 	}
 
-	if _, err := c.driver.LaunchTasks(offerIDs, []*mesosproto.TaskInfo{&t.TaskInfo}, &mesosproto.Filters{}); err != nil {
-		// TODO: Do not erase all the offers, only the one used
-		for _, offer := range s.offers {
-			c.removeOffer(offer)
+	// TODO: Only use the offer we need from a slave
+	offerIDs := []*mesosproto.OfferID{}
+	for s, _ := range usedSlaves {
+		for _, offer := range c.slaves[s.id].offers {
+			offerIDs = append(offerIDs, offer.Id)
+			c.removeOffer(offer, true)
+		}
+	}
+
+	if _, err := c.driver.LaunchTasks(offerIDs, taskInfos, &mesosproto.Filters{}); err != nil {
+		for s, ts := range usedSlaves {
+			for _, t := range ts {
+				taskID := t.TaskInfo.TaskId.GetValue()
+				s.removeTask(taskID)
+				t.error <- err
+			}
 		}
 		c.Unlock()
-		t.error <- err
-		return true
+		return scheduled
 	}
 
-	s.addTask(t)
-
-	// TODO: Do not erase all the offers, only the one used
-	for _, offer := range s.offers {
-		c.removeOffer(offer)
-	}
 	c.Unlock()
-	// block until we get the container
-	finished, data, err := t.monitor()
-	taskID := t.TaskInfo.TaskId.GetValue()
-	if err != nil {
-		//remove task
-		s.removeTask(taskID)
-		t.error <- err
-		return true
-	}
-	if !finished {
-		go func() {
-			for {
-				finished, _, err := t.monitor()
+
+	for s, ts := range usedSlaves {
+		for _, t := range ts {
+			go func(s *slave, t *task) {
+				finished, data, err := t.monitor()
+				taskID := t.TaskInfo.TaskId.GetValue()
 				if err != nil {
-					// TODO do a better log by sending proper error message
-					log.Error(err)
-					break
+					//remove task
+					s.removeTask(taskID)
+					t.error <- err
+					return
 				}
+
+				// remove the task once it's finished
+
+				// Register the container immediately while waiting for a state refresh.
+
+				// In mesos 0.23+ the docker inspect will be sent back in the taskStatus.Data
+				// We can use this to find the right container.
+				inspect := []dockerclient.ContainerInfo{}
+				if data != nil && json.Unmarshal(data, &inspect) != nil && len(inspect) == 1 {
+					container := &cluster.Container{Container: dockerclient.Container{Id: inspect[0].Id}, Engine: s.engine}
+					if container.Refresh() == nil {
+						t.container <- container
+						return
+					}
+				}
+
+				log.Debug("Cannot parse docker info from task status, please upgrade Mesos to the last version")
+				// For mesos <= 0.22 we fallback to a full refresh + using labels
+				// TODO: once 0.23 or 0.24 is released, remove all this block of code as it
+				// doesn't scale very well.
+				s.engine.RefreshContainers(true)
+
+				for _, container := range s.engine.Containers() {
+					if container.Config.Labels[cluster.SwarmLabelNamespace+".mesos.task"] == taskID {
+						t.container <- container
+						return
+					}
+				}
+
+				t.error <- fmt.Errorf("Container failed to create")
+
 				if finished {
-					break
+					s.removeTask(taskID)
 				}
-			}
-			//remove the task once it's finished
-		}()
-	}
-
-	// Register the container immediately while waiting for a state refresh.
-
-	// In mesos 0.23+ the docker inspect will be sent back in the taskStatus.Data
-	// We can use this to find the right container.
-	inspect := []dockerclient.ContainerInfo{}
-	if data != nil && json.Unmarshal(data, &inspect) != nil && len(inspect) == 1 {
-		container := &cluster.Container{Container: dockerclient.Container{Id: inspect[0].Id}, Engine: s.engine}
-		if container.Refresh() == nil {
-			t.container <- container
-			return true
+			}(s, t)
 		}
 	}
-
-	log.Debug("Cannot parse docker info from task status, please upgrade Mesos to the last version")
-	// For mesos <= 0.22 we fallback to a full refresh + using labels
-	// TODO: once 0.23 or 0.24 is released, remove all this block of code as it
-	// doesn't scale very well.
-	s.engine.RefreshContainers(true)
-
-	for _, container := range s.engine.Containers() {
-		if container.Config.Labels[cluster.SwarmLabelNamespace+".mesos.task"] == taskID {
-			t.container <- container
-			return true
-		}
-	}
-
-	t.error <- fmt.Errorf("Container failed to create")
-	return true
+	return scheduled
 }
 
 // RANDOMENGINE returns a random engine.

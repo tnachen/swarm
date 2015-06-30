@@ -422,7 +422,7 @@ func (c *Cluster) addOffer(offer *mesosproto.Offer) {
 	}(offer)
 }
 
-func (c *Cluster) removeOffer(offer *mesosproto.Offer) bool {
+func (c *Cluster) _removeOffer(offer *mesosproto.Offer) bool {
 	log.WithFields(log.Fields{"name": "mesos", "offerID": offer.Id.String()}).Debug("Removing offer")
 	s, ok := c.slaves[offer.SlaveId.GetValue()]
 	if !ok {
@@ -434,6 +434,13 @@ func (c *Cluster) removeOffer(offer *mesosproto.Offer) bool {
 		delete(c.slaves, offer.SlaveId.GetValue())
 	}
 	return found
+}
+
+func (c *Cluster) removeOffer(offer *mesosproto.Offer) bool {
+	c.Lock()
+	defer c.Unlock()
+
+	return c._removeOffer(offer)
 }
 
 func (c *Cluster) placeTask(task *task, nodes []*node.Node) *slave {
@@ -486,7 +493,7 @@ func (c *Cluster) scheduleTasks(tasks []*task) []*task {
 	for s := range usedSlaves {
 		for _, offer := range c.slaves[s.id].offers {
 			offerIDs = append(offerIDs, offer.Id)
-			c.removeOffer(offer)
+			c._removeOffer(offer)
 		}
 	}
 

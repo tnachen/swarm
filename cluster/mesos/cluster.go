@@ -36,7 +36,7 @@ type Cluster struct {
 	options             *cluster.DriverOpts
 	offerTimeout        time.Duration
 	taskCreationTimeout time.Duration
-	pendingTasks        *queue.Queue
+	pendingTasks        *Queue
 }
 
 const (
@@ -162,12 +162,12 @@ func (c *Cluster) CreateContainer(config *cluster.ContainerConfig, name string) 
 		return nil, errResourcesNeeded
 	}
 
-	task, err := newTask(c, config, name)
+	t, err := newTask(c, config, name)
 	if err != nil {
 		return nil, err
 	}
 
-	go c.pendingTasks.Add(task)
+	go c.pendingTasks.Add(t)
 
 	select {
 	case container := <-t.container:
@@ -330,7 +330,7 @@ func (c *Cluster) Volume(name string) *cluster.Volume {
 }
 
 // listNodes returns all the nodess in the cluster.
-func (c *Cluster) listNodes() []*node.Node {
+func (c *Cluster) _listNodes() []*node.Node {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -345,6 +345,14 @@ func (c *Cluster) listNodes() []*node.Node {
 		out = append(out, n)
 	}
 	return out
+}
+
+// listNodes returns all the nodess in the cluster.
+func (c *Cluster) listNodes() []*node.Node {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c._listNodes()
 }
 
 func (c *Cluster) listOffers() []*mesosproto.Offer {
@@ -454,7 +462,7 @@ func (c *Cluster) placeTask(task *task, nodes []*node.Node) *slave {
 		return nil
 	}
 
-	task.build(n.ID)
+	task.build(n.ID, s.getOffers())
 	n.TotalCpus -= task.config.CpuShares
 	n.TotalMemory -= task.config.Memory
 	s.addTask(task)
@@ -475,38 +483,36 @@ func (c *Cluster) scheduleTasks(tasks []*task) []*task {
 	nodes := c.listNodes()
 	for _, t := range tasks {
 		if s := c.placeTask(t, nodes); s != nil {
-			ts, ok := usedSlaves[s]
+			tasks, ok := usedSlaves[s]
 			if !ok {
-				ts = []*task{t}
-				usedSlaves[s] = ts
+				tasks = []*task{t}
+				usedSlaves[s] = tasks
+				taskInfos[s] = []*mesosproto.TaskInfo{&t.TaskInfo}
 			} else {
-				ts = append(ts, t)
+				tasks = append(tasks, t)
+				taskInfos[s] = append(taskInfos[s], &t.TaskInfo)
 			}
 			scheduled = append(scheduled, t)
-			taskInfos = append(taskInfos, &t.TaskInfo)
 		}
 	}
 
-	c.Lock()
 	// TODO: Only use the offer we need from a slave
-	offerIDs := []*mesosproto.OfferID{}
 	for s := range usedSlaves {
+		offerIDs := []*mesosproto.OfferID{}
 		for _, offer := range c.slaves[s.id].offers {
 			offerIDs = append(offerIDs, offer.Id)
 			c._removeOffer(offer)
 		}
-	}
 
-	if _, err := c.driver.LaunchTasks(offerIDs, taskInfos, &mesosproto.Filters{}); err != nil {
-		for s, ts := range usedSlaves {
-			for _, t := range ts {
+		if _, err := c.driver.LaunchTasks(offerIDs, taskInfos[s], &mesosproto.Filters{}); err != nil {
+			for _, t := range usedSlaves[s] {
 				taskID := t.TaskInfo.TaskId.GetValue()
 				s.removeTask(taskID)
 				t.error <- err
 			}
+			delete(usedSlaves, s)
+			delete(taskInfos, s)
 		}
-		c.Unlock()
-		return scheduled
 	}
 
 	c.Unlock()

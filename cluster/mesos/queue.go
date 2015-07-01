@@ -22,7 +22,7 @@ func NewQueue(c *Cluster) *Queue {
 	return &Queue{tasks: make(map[string]*task), c: c}
 }
 
-// Add tries to Do the task, if it's not possible, add the item to the queue for future tries
+// Add the item to the queue for future tries
 func (q *Queue) Add(task *task) {
 	q.Lock()
 	q.tasks[task.ID()] = task
